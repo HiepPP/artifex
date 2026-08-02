@@ -209,7 +209,7 @@ impl WatchHub {
         let (tx, changes) = async_channel::unbounded();
         let thread_registry = Arc::clone(&registry);
         std::thread::Builder::new()
-            .name("rustelier-watch".into())
+            .name("artifex-watch".into())
             .spawn(move || debounce(raw_rx, thread_registry, tx))
             .ok()?;
 

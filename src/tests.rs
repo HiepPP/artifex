@@ -10,7 +10,7 @@ use crate::terminal::keys;
 use crate::theme::{Colors, LayoutMode};
 
 fn fixture_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("rustelier-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("artifex-test-{}", std::process::id()));
     let _ = fs::create_dir_all(dir.join("src"));
     let _ = fs::create_dir_all(dir.join("node_modules/pkg"));
     let _ = fs::create_dir_all(dir.join(".git"));
@@ -316,7 +316,7 @@ fn git_snapshot_reads_this_repository() {
 fn temp_repo(label: &str) -> std::path::PathBuf {
     use std::process::Command;
 
-    let dir = std::env::temp_dir().join(format!("rustelier-git-{}-{label}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("artifex-git-{}-{label}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
 
     let git = |args: &[&str]| {
@@ -438,7 +438,7 @@ fn recent_commits_are_read() {
 /// A root carrying one `.gitignore`, so the watcher's ignore matcher has
 /// something to read.
 fn watch_root() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("rustelier-watch-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("artifex-watch-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(".gitignore"), "build/\n*.log\n").unwrap();
     dir
@@ -476,7 +476,7 @@ fn ignored_trees_never_reach_the_debouncer() {
     let root = watch_root();
     let create = EventKind::Create(CreateKind::File);
     let dropped = [
-        "target/debug/rustelier",
+        "target/debug/artifex",
         "node_modules/pkg/index.js",
         "docs/dist/bundle.js",
         // Matched by the fixture's own .gitignore.

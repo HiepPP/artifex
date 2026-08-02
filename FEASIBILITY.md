@@ -1,4 +1,4 @@
-# Rustelier: Atelier on Rust and GPUI
+# Artifex: Atelier on Rust and GPUI
 
 Measured on macOS 26.5.1, Apple silicon, 10 cores, 24 GB. Rust 1.97.1.
 Every number below came from this POC on this machine. The Swift figures are the

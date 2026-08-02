@@ -82,7 +82,7 @@ pub struct Shell {
 impl Shell {
     pub fn build(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let root = resolve_root();
-        eprintln!("rustelier: workspace root {}", root.display());
+        eprintln!("artifex: workspace root {}", root.display());
 
         let split = cx.new(|_| ResizableState::default());
         let workspace = Workspace::open(root, window, cx);

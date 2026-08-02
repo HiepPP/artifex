@@ -1,4 +1,4 @@
-# Rustelier Design System
+# Artifex Design System
 
 ## Document Status
 
@@ -10,16 +10,16 @@
 | UI stack | Rust, GPUI (Zed), gpui-component |
 | Parent contract | `atelier/DESIGN.md`, Atelier baseline `02ebe5b` |
 
-This file governs the Rustelier build. It is adapted from the Atelier design
+This file governs the Artifex build. It is adapted from the Atelier design
 contract: the visual language, tokens, and interaction rules are the same, and
 the platform layer is not. Where the two differ, this file records what
-Rustelier actually does and why.
+Artifex actually does and why.
 
 Update this contract before implementing behavior that changes it.
 
 ## Scope
 
-Rustelier is a feasibility probe, not a product. It covers the shell and eight
+Artifex is a feasibility probe, not a product. It covers the shell and eight
 surfaces at usable depth. The table states what the parent contract asks for and
 what this build carries.
 
@@ -41,7 +41,7 @@ partial diagnostics writer to this build.
 
 ## Product Character
 
-Rustelier is a native macOS workspace tool. It should feel focused, dense, calm,
+Artifex is a native macOS workspace tool. It should feel focused, dense, calm,
 and expensive.
 
 - Keep the center editor as the main visual surface.
@@ -218,7 +218,7 @@ Color rules:
 
 ## Spacing and Shape Tokens
 
-Rustelier uses an 8-point grid with a 4-point half step.
+Artifex uses an 8-point grid with a 4-point half step.
 
 | Token | Value |
 |---|---:|

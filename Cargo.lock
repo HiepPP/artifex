@@ -286,6 +286,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "artifex"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "async-channel",
+ "gix",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui-wry",
+ "gpui_platform",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "lb-wry",
+ "libc",
+ "notify 8.2.0",
+ "nucleo-matcher",
+ "parking_lot",
+ "pulldown-cmark",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tree-sitter",
+ "tree-sitter-highlight",
+ "tree-sitter-rust",
+ "tree-sitter-swift",
+]
+
+[[package]]
 name = "as-slice"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7533,40 +7567,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustelier"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "async-channel",
- "gix",
- "gpui",
- "gpui-component",
- "gpui-component-assets",
- "gpui-wry",
- "gpui_platform",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "lb-wry",
- "libc",
- "notify 8.2.0",
- "nucleo-matcher",
- "parking_lot",
- "pulldown-cmark",
- "raw-window-handle",
- "rfd",
- "serde",
- "serde_json",
- "smallvec",
- "tree-sitter",
- "tree-sitter-highlight",
- "tree-sitter-rust",
- "tree-sitter-swift",
 ]
 
 [[package]]

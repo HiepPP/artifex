@@ -29,7 +29,7 @@ const PAGE: &str = r#"<!doctype html>
    code { background: #292C30; }
  }
 </style></head><body>
-<h1>Rustelier - webview gate</h1>
+<h1>Artifex - webview gate</h1>
 <p>Scroll this page. Resize the window. Watch the rounded corners of the host card.</p>
 <div id="rows"></div>
 <script>
@@ -197,7 +197,7 @@ fn tab_cell(
 }
 
 fn write_page() -> PathBuf {
-    let path = std::env::temp_dir().join("rustelier-gate2.html");
+    let path = std::env::temp_dir().join("artifex-gate2.html");
     let _ = std::fs::write(&path, PAGE);
     path
 }

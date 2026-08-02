@@ -7,8 +7,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${1:-debug}"
-BIN="$ROOT/target/$PROFILE/rustelier"
-APP="$ROOT/dist/Rustelier.app"
+BIN="$ROOT/target/$PROFILE/artifex"
+APP="$ROOT/dist/Artifex.app"
 ICON="$ROOT/assets/AppIcon.icns"
 
 if [[ ! -x "$BIN" ]]; then
@@ -23,10 +23,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Rustelier</string>
-    <key>CFBundleDisplayName</key><string>Rustelier</string>
-    <key>CFBundleExecutable</key><string>rustelier</string>
-    <key>CFBundleIdentifier</key><string>com.rustelier.app</string>
+    <key>CFBundleName</key><string>Artifex</string>
+    <key>CFBundleDisplayName</key><string>Artifex</string>
+    <key>CFBundleExecutable</key><string>artifex</string>
+    <key>CFBundleIdentifier</key><string>com.artifex.app</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
@@ -40,7 +40,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cp -f "$BIN" "$APP/Contents/MacOS/rustelier"
+cp -f "$BIN" "$APP/Contents/MacOS/artifex"
 if [[ -f "$ICON" ]]; then
     cp -f "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 else

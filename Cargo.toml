@@ -1,12 +1,12 @@
 [package]
-name = "rustelier"
+name = "artifex"
 version = "0.1.0"
 edition = "2024"
 publish = false
 description = "Feasibility POC: Atelier shell rebuilt on Rust + GPUI"
 
 [[bin]]
-name = "rustelier"
+name = "artifex"
 path = "src/main.rs"
 
 [dependencies]

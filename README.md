@@ -1,8 +1,8 @@
-# Rustelier
+# Artifex
 
 A feasibility probe: how much of Atelier can be rebuilt on Rust and GPUI, and what
-it costs. The name is Rust wearing Atelier's coat. This is not a product. It
-exists to answer one question with numbers.
+it costs. The name is Latin for a master craftsman, which is the trade Atelier is
+named for. This is not a product. It exists to answer one question with numbers.
 
 The Swift application in `../atelier` is untouched by this project. Nothing here
 writes to it. One 146 KB Swift file was copied into `fixtures/` as a scroll
@@ -73,13 +73,13 @@ because cargo resolves its `rustc` through `PATH`; the build then fails on
 GPUI needs a real `.app` bundle on macOS. An unbundled binary cannot activate,
 cannot own a menu bar, and cannot receive input-method events, so it cannot pass
 the Vietnamese gate. `build.sh` ends by calling `scripts/bundle.sh`, which writes
-`dist/Rustelier.app`; run `bundle.sh` alone to re-wrap a binary you already have.
+`dist/Artifex.app`; run `bundle.sh` alone to re-wrap a binary you already have.
 
 ```bash
-"dist/Rustelier.app/Contents/MacOS/rustelier"          # application shell
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate1    # Vietnamese input
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate2    # embedded web preview
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate3    # zsh terminal
+"dist/Artifex.app/Contents/MacOS/artifex"          # application shell
+"dist/Artifex.app/Contents/MacOS/artifex" gate1    # Vietnamese input
+"dist/Artifex.app/Contents/MacOS/artifex" gate2    # embedded web preview
+"dist/Artifex.app/Contents/MacOS/artifex" gate3    # zsh terminal
 ```
 
 Running the binary from inside the bundle keeps the bundle identity and keeps

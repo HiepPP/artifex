@@ -1,10 +1,10 @@
 //! Atelier GPUI feasibility POC.
 //!
 //! ```text
-//! rustelier            Phase 1..3 application shell
-//! rustelier gate1      Phase 0 gate 1: Vietnamese IME input
-//! rustelier gate2      Phase 0 gate 2: embedded web preview (wry)
-//! rustelier gate3      Phase 0 gate 3: zsh terminal (alacritty_terminal)
+//! artifex            Phase 1..3 application shell
+//! artifex gate1      Phase 0 gate 1: Vietnamese IME input
+//! artifex gate2      Phase 0 gate 2: embedded web preview (wry)
+//! artifex gate3      Phase 0 gate 3: zsh terminal (alacritty_terminal)
 //! ```
 
 mod app;
@@ -64,7 +64,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(centered_in_visible_area(size(px(1440.), px(900.)), cx)),
             titlebar: Some(TitlebarOptions {
-                title: Some("Rustelier".into()),
+                title: Some("Artifex".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),
@@ -102,7 +102,7 @@ fn main() {
             });
 
             if let Err(err) = opened {
-                eprintln!("rustelier: failed to open window: {err}");
+                eprintln!("artifex: failed to open window: {err}");
             }
         })
         .detach();

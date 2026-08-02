@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Rustelier is a feasibility probe, not a product. It answers one question with
+Artifex is a feasibility probe, not a product. It answers one question with
 numbers: how much of the Swift application in `../atelier` can be rebuilt on
 Rust + GPUI, and what it costs. `FEASIBILITY.md` holds the verdict ("not yet")
 and the measured defect list.
@@ -21,7 +21,7 @@ writes to it.
 ./scripts/build.sh release
 ./scripts/test.sh               # non-UI tests only, no display needed
 ./scripts/test.sh file_tree_expands_lazily   # args pass through: single test
-./scripts/bundle.sh debug       # re-wrap an existing binary into dist/Rustelier.app
+./scripts/bundle.sh debug       # re-wrap an existing binary into dist/Artifex.app
 ```
 
 Use the scripts, not bare cargo. A Homebrew `rustc` earlier on `PATH` shadows
@@ -39,10 +39,10 @@ cannot own a menu bar, and cannot receive input-method events. Run from inside
 the bundle so bundle identity holds and `stdout` stays attached:
 
 ```bash
-"dist/Rustelier.app/Contents/MacOS/rustelier"          # application shell
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate1    # Vietnamese IME probe
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate2    # embedded web preview
-"dist/Rustelier.app/Contents/MacOS/rustelier" gate3    # zsh terminal
+"dist/Artifex.app/Contents/MacOS/artifex"          # application shell
+"dist/Artifex.app/Contents/MacOS/artifex" gate1    # Vietnamese IME probe
+"dist/Artifex.app/Contents/MacOS/artifex" gate2    # embedded web preview
+"dist/Artifex.app/Contents/MacOS/artifex" gate3    # zsh terminal
 ```
 
 Optional second argument to the shell mode is the workspace root. Without it,
