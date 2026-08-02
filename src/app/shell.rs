@@ -125,29 +125,73 @@ impl Shell {
         }
     }
 
+    /// Opens the native folder picker, then opens the chosen folder as a
+    /// workspace.
+    ///
+    /// `App::prompt_for_paths` cannot say which folder the panel starts in, so
+    /// the panel comes from `rfd`, which can. The picker runs off the main
+    /// thread's current pass and reports back through the window context.
     fn add_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A POC stands in for the folder picker: every sibling of the current
-        // root becomes an openable workspace, which is enough to reach nine
-        // live sessions for the idle-CPU measurement.
-        let current = self.workspace().root.clone();
-        let Some(parent) = current.parent().map(|p| p.to_path_buf()) else {
-            return;
-        };
-        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&parent)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .map(|entry| entry.path())
-            .filter(|path| !self.workspaces.iter().any(|w| &w.root == path))
-            .collect();
-        candidates.sort();
-        let Some(next) = candidates.into_iter().next() else {
-            self.set_status("no more sibling folders to open");
+        let start = self.picker_start_directory();
+
+        cx.spawn_in(window, async move |shell, cx| {
+            let picked = rfd::AsyncFileDialog::new()
+                .set_title("Open Workspace")
+                .set_directory(&start)
+                .pick_folder()
+                .await;
+            let Some(folder) = picked else {
+                return;
+            };
+            let path = folder.path().to_path_buf();
+            let _ = shell.update_in(cx, |shell, window, cx| {
+                shell.open_workspace_folder(path, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Where the folder picker opens. `~/Projects` is the working habit this
+    /// POC is measured against; the last folder opened wins once there is one,
+    /// and the home directory is the fallback.
+    fn picker_start_directory(&self) -> PathBuf {
+        let last_parent = self
+            .workspaces
+            .last()
+            .and_then(|workspace| workspace.root.parent().map(|p| p.to_path_buf()))
+            .filter(|path| path.is_dir());
+        if let Some(parent) = last_parent {
+            return parent;
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let projects = home.as_ref().map(|home| home.join("Projects"));
+        match (projects, home) {
+            (Some(projects), _) if projects.is_dir() => projects,
+            (_, Some(home)) => home,
+            _ => PathBuf::from("/"),
+        }
+    }
+
+    /// Adds `path` as a workspace, or selects it when it is already open.
+    fn open_workspace_folder(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = crate::services::git::repo_root(&path);
+        if let Some(index) = self
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.root == root)
+        {
+            self.select_workspace(index, cx);
+            self.set_status(format!("{} is already open", root.display()));
             cx.notify();
             return;
-        };
-        let workspace = Workspace::open(next, window, cx);
+        }
+
+        let workspace = Workspace::open(root, window, cx);
         self.workspaces.push(workspace);
         self.active = self.workspaces.len() - 1;
         cx.notify();

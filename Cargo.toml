@@ -63,6 +63,10 @@ pulldown-cmark = { version = "0.13", default-features = false, features = [
     "html",
 ] }
 
+# --- Native dialogs -----------------------------------------------------
+# GPUI's own `prompt_for_paths` cannot set the folder the panel opens in.
+rfd = "0.17"
+
 # --- Misc ---------------------------------------------------------------
 anyhow = "1"
 async-channel = "2"

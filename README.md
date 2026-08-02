@@ -51,6 +51,7 @@ cargo update gpui --precise 1a246efd7e1b83ab568ec5e3e6c1a43a42e1abba
 | `grep-regex` | 0.1.14 | Literal and whole-word patterns |
 | `gix` | 0.86.0 | Git reads: branch, HEAD, working-tree status |
 | `pulldown-cmark` | 0.13.4 | Markdown parsing |
+| `rfd` | 0.17.2 | Folder picker for Add Workspace; GPUI's own prompt cannot pick the starting folder |
 | `async-channel` | 2.5.0 | PTY events and search batches into GPUI tasks |
 | `notify` | 8.2.0 | Pulled in by `gpui-component`; no watcher is wired up |
 
@@ -94,7 +95,7 @@ delta. `peak_cpu.sh` reports per-second windows where 100% is one core.
 
 | Area | State |
 |---|---|
-| Workspace rail | Many live workspaces, `Cmd-1` to `Cmd-9`, `Cmd-0` to add, changed-file badge |
+| Workspace rail | Many live workspaces, `Cmd-1` to `Cmd-9`, `Cmd-0` opens a folder picker, changed-file badge |
 | Three-pane split | Explorer or Git, center tabs, inspector; draggable, `DESIGN.md` width ranges |
 | Status bar | Branch, short HEAD, changed count, layout mode, appearance, zoom |
 | Explorer | Lazy tree, hard ignores, single click opens a preview tab |
