@@ -70,6 +70,9 @@ pub struct Workspace {
     /// this set is Git-ignored, which `DESIGN.md` renders at reduced opacity
     /// rather than hiding.
     visible: HashSet<PathBuf>,
+    /// False until the first walk lands. The Explorer must not dim every row
+    /// while the index is still being built.
+    indexed: bool,
     pub tabs: Vec<Tab>,
     pub selected: usize,
     /// The commit subject. `DESIGN.md` keeps the composer multiline and focused
@@ -80,6 +83,11 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Opens the workspace without touching the tree beyond the root listing.
+    ///
+    /// The file index and the Git snapshot both walk the whole workspace, so
+    /// `Shell` builds them off the main thread and hands them back through
+    /// `apply_scan`.
     pub fn open(root: PathBuf, window: &mut Window, cx: &mut App) -> Self {
         let root = git::repo_root(&root);
         let name = root
@@ -95,9 +103,10 @@ impl Workspace {
         });
         let mut workspace = Self {
             tree: FileTree::new(root.clone()),
-            git: git::snapshot(&root),
+            git: GitSnapshot::default(),
             index: Vec::new(),
             visible: HashSet::new(),
+            indexed: false,
             tabs: Vec::new(),
             selected: 0,
             commit_input,
@@ -106,7 +115,6 @@ impl Workspace {
             root,
             name,
         };
-        workspace.reindex();
         workspace.open_terminal(window, cx);
         workspace
     }
@@ -114,7 +122,7 @@ impl Workspace {
     /// True when the path is Git-ignored, so the Explorer can keep it visible
     /// but quiet.
     pub fn is_ignored(&self, path: &Path) -> bool {
-        !self.visible.contains(path)
+        self.indexed && !self.visible.contains(path)
     }
 
     fn next_id(&mut self) -> usize {
@@ -131,12 +139,22 @@ impl Workspace {
     }
 
     pub fn reindex(&mut self) {
-        self.index = file_index::build(&self.root);
-        self.visible = self
-            .index
+        self.set_index(file_index::build(&self.root));
+    }
+
+    /// Applies a scan built off the main thread.
+    pub fn apply_scan(&mut self, files: Vec<IndexedFile>, git: GitSnapshot) {
+        self.git = git;
+        self.set_index(files);
+    }
+
+    fn set_index(&mut self, files: Vec<IndexedFile>) {
+        self.visible = files
             .iter()
             .flat_map(|file| file.absolute.ancestors().map(Path::to_path_buf))
             .collect();
+        self.index = files;
+        self.indexed = true;
         self.tree.refresh();
     }
 

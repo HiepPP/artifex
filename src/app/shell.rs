@@ -77,17 +77,14 @@ pub struct Shell {
 
 impl Shell {
     pub fn build(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        let root = std::env::args()
-            .nth(2)
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"));
+        let root = resolve_root();
+        eprintln!("rustelier: workspace root {}", root.display());
 
         let split = cx.new(|_| ResizableState::default());
         let workspace = Workspace::open(root, window, cx);
         let dark = gpui_component::Theme::global(cx).is_dark();
 
-        cx.new(|cx| Self {
+        let shell = cx.new(|cx| Self {
             workspaces: vec![workspace],
             active: 0,
             shows_sidebar: true,
@@ -101,7 +98,39 @@ impl Shell {
             overlay: OverlayState::default(),
             status: None,
             focus: cx.focus_handle(),
+        });
+        shell.update(cx, |shell, cx| shell.scan_workspace(0, cx));
+        shell
+    }
+
+    /// Builds the file index and the Git snapshot for one workspace off the
+    /// main thread.
+    ///
+    /// Both walk the whole tree. Run inline they block the `open_window`
+    /// callback, so a large root means the window is never created at all.
+    fn scan_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(root) = self.workspaces.get(index).map(|w| w.root.clone()) else {
+            return;
+        };
+        cx.spawn(async move |shell, cx| {
+            let (files, git) = cx
+                .background_spawn(async move {
+                    (
+                        crate::services::file_index::build(&root),
+                        crate::services::git::snapshot(&root),
+                    )
+                })
+                .await;
+            shell
+                .update(cx, |shell, cx| {
+                    if let Some(workspace) = shell.workspaces.get_mut(index) {
+                        workspace.apply_scan(files, git);
+                    }
+                    cx.notify();
+                })
+                .ok();
         })
+        .detach();
     }
 
     pub fn workspace(&self) -> &Workspace {
@@ -194,6 +223,7 @@ impl Shell {
         let workspace = Workspace::open(root, window, cx);
         self.workspaces.push(workspace);
         self.active = self.workspaces.len() - 1;
+        self.scan_workspace(self.active, cx);
         cx.notify();
     }
 
@@ -768,6 +798,33 @@ impl Render for Shell {
                     ),
             )
     }
+}
+
+/// Picks the workspace root for this launch.
+///
+/// LaunchServices sets the working directory to `/`, so the `current_dir`
+/// fallback would otherwise make the whole filesystem the workspace. A
+/// directory with no parent is the filesystem root, which is never a
+/// workspace; the home directory is what a Finder or Dock launch lands on.
+fn resolve_root() -> PathBuf {
+    let explicit = std::env::args().nth(2).map(PathBuf::from);
+    let current = std::env::current_dir().ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+
+    [explicit, current, home]
+        .into_iter()
+        .flatten()
+        .find_map(plausible_root)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// `None` for anything that is not a real directory below the filesystem root.
+fn plausible_root(path: PathBuf) -> Option<PathBuf> {
+    let path = std::fs::canonicalize(path).ok()?;
+    if !path.is_dir() || path.parent().is_none() {
+        return None;
+    }
+    Some(path)
 }
 
 pub fn bind_keys(cx: &mut App) {

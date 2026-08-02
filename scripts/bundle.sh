@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${1:-debug}"
 BIN="$ROOT/target/$PROFILE/rustelier"
 APP="$ROOT/dist/Rustelier.app"
+ICON="$ROOT/assets/AppIcon.icns"
 
 if [[ ! -x "$BIN" ]]; then
     echo "missing binary: $BIN" >&2
@@ -26,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key><string>Rustelier</string>
     <key>CFBundleExecutable</key><string>rustelier</string>
     <key>CFBundleIdentifier</key><string>com.rustelier.app</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -39,6 +41,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 cp -f "$BIN" "$APP/Contents/MacOS/rustelier"
+if [[ -f "$ICON" ]]; then
+    cp -f "$ICON" "$APP/Contents/Resources/AppIcon.icns"
+else
+    echo "warning: app icon not found: $ICON" >&2
+fi
 codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1 || true
 
 echo "$APP"

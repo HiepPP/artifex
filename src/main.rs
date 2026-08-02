@@ -76,7 +76,7 @@ fn main() {
         };
 
         cx.spawn(async move |cx| {
-            let _ = cx.open_window(options, |window, cx| {
+            let opened = cx.open_window(options, |window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
                 let dark = Theme::global(cx).is_dark();
                 theme::init(dark, cx);
@@ -100,6 +100,10 @@ fn main() {
                 app::shell::bind_keys(cx);
                 root
             });
+
+            if let Err(err) = opened {
+                eprintln!("rustelier: failed to open window: {err}");
+            }
         })
         .detach();
 
