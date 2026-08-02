@@ -226,6 +226,14 @@ impl Render for MarkdownView {
 }
 
 fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
+    // Definite widths, not `w_full` plus `max_w`. Text is measured against the
+    // width the parent proposes, which is the full column, and the maximum is
+    // applied afterwards. A paragraph that wraps to two lines at 640 points
+    // still reports the height of one line at 900, so the next block draws on
+    // top of it and a long line is cut off at the column edge.
+    let prose = px(f32::from(measure).min(PROSE_WIDTH));
+    let bleed = px(f32::from(measure).min(BLEED_WIDTH));
+
     match block.clone() {
         Block::Heading(level, text) => {
             let ratio = match level {
@@ -236,8 +244,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                 _ => 0.92,
             };
             v_flex()
-                .w_full()
-                .max_w(px(PROSE_WIDTH))
+                .w(prose)
                 .mx_auto()
                 .mt((Type::EDITOR * 1.4))
                 .mb((Type::EDITOR * 0.5))
@@ -266,8 +273,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                 .into_any_element()
         }
         Block::Paragraph(text) => div()
-            .w_full()
-            .max_w(px(PROSE_WIDTH))
+            .w(prose)
             .mx_auto()
             .my((Type::EDITOR * 0.5))
             .text_size(Type::EDITOR)
@@ -275,8 +281,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
             .child(SharedString::from(text))
             .into_any_element(),
         Block::ListItem(depth, text, checked) => h_flex()
-            .w_full()
-            .max_w(px(PROSE_WIDTH))
+            .w(prose)
             .mx_auto()
             .items_start()
             .pl(px(8. + depth as f32 * 16.))
@@ -297,8 +302,12 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                     }),
             )
             .child(
+                // `min_w(0)` beats the automatic minimum, which is the width of
+                // the text on one line. Without it the item never wraps and the
+                // tail runs past the column.
                 div()
                     .flex_1()
+                    .min_w(px(0.))
                     .text_size(Type::EDITOR)
                     .line_height((Type::EDITOR * 1.55))
                     .when(checked == Some(true), |this| {
@@ -311,8 +320,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
         // sized by wrapped text collapses it to nothing inside the scrolling
         // document. The rounded corners lose their clip; the content stays.
         Block::Code(language, text) => v_flex()
-            .w_full()
-            .max_w(px(BLEED_WIDTH))
+            .w(bleed)
             .mx_auto()
             .my((Type::EDITOR * 1.25))
             .rounded(Radius::CONTROL)
@@ -351,13 +359,17 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                                     .text_color(c.ink_secondary.opacity(0.55))
                                     .child(SharedString::from((index + 1).to_string())),
                             )
-                            .child(div().flex_1().child(SharedString::from(line.to_string())))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .child(SharedString::from(line.to_string())),
+                            )
                     })),
             )
             .into_any_element(),
         Block::Quote(text) => h_flex()
-            .w_full()
-            .max_w(px(PROSE_WIDTH))
+            .w(prose)
             .mx_auto()
             .my((Type::EDITOR * 1.25))
             .items_stretch()
@@ -365,6 +377,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
             .child(
                 div()
                     .flex_1()
+                    .min_w(px(0.))
                     .pl(Space::M)
                     .italic()
                     .text_color(c.ink_secondary)
@@ -373,8 +386,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
             )
             .into_any_element(),
         Block::Rule => h_flex()
-            .w_full()
-            .max_w(px(PROSE_WIDTH))
+            .w(prose)
             .mx_auto()
             .my((Type::EDITOR * 1.75))
             .justify_center()
