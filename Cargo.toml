@@ -1,0 +1,104 @@
+[package]
+name = "rustelier"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Feasibility POC: Atelier shell rebuilt on Rust + GPUI"
+
+[[bin]]
+name = "rustelier"
+path = "src/main.rs"
+
+[dependencies]
+# --- GPUI (zed) ---------------------------------------------------------
+# Declared without an explicit `rev` so the source id matches the one
+# gpui-component uses. Cargo.lock pins the exact commit; see README.md.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+    "runtime_shaders",
+] }
+
+# --- Component kit ------------------------------------------------------
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "88f102d13654fe25aa2fede076274b6b751a3704", features = [
+    "tree-sitter",
+    "tree-sitter-rust",
+    "tree-sitter-swift",
+    "tree-sitter-markdown",
+    "tree-sitter-toml",
+    "tree-sitter-yaml",
+    "tree-sitter-bash",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-html",
+    "tree-sitter-css",
+] }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "88f102d13654fe25aa2fede076274b6b751a3704" }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "88f102d13654fe25aa2fede076274b6b751a3704" }
+wry = { version = "0.53.3", package = "lb-wry" }
+raw-window-handle = { version = "0.6", features = ["std"] }
+
+# --- Terminal -----------------------------------------------------------
+alacritty_terminal = "0.26.0"
+
+# --- Syntax highlighting (viewport scoped) ------------------------------
+tree-sitter = "0.26"
+tree-sitter-highlight = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+
+# --- Search / fuzzy -----------------------------------------------------
+nucleo-matcher = "0.3"
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+
+# --- Git (read) ---------------------------------------------------------
+gix = { version = "0.86", features = ["status"] }
+
+# --- Markdown -----------------------------------------------------------
+pulldown-cmark = { version = "0.13", default-features = false, features = [
+    "html",
+] }
+
+# --- Misc ---------------------------------------------------------------
+anyhow = "1"
+async-channel = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec = "1"
+parking_lot = "0.12"
+notify = "8"
+libc = "0.2"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+# Mirrors gpui-component: keep the heavy render/parse crates optimised even in
+# debug so idle-CPU and scroll measurements are not dominated by debug builds.
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+gpui_macros = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+tree-sitter = { opt-level = 3 }
+tree-sitter-highlight = { opt-level = 3 }
+alacritty_terminal = { opt-level = 3 }
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+ropey = { opt-level = 3 }
+sum_tree = { opt-level = 3 }
+lsp-types = { opt-level = 3 }
+markdown = { opt-level = 3 }
+xml5ever = { opt-level = 3 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
