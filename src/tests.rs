@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use crate::services::{file_index, fs_tree, highlight, search};
+use crate::services::{file_index, fs_tree, highlight, search, watch};
 use crate::terminal::keys;
 use crate::theme::{Colors, LayoutMode};
 
@@ -433,6 +433,85 @@ fn recent_commits_are_read() {
     assert_eq!(head.subject, "initial");
     assert_eq!(head.author, "POC");
     assert_eq!(head.short_hash.len(), 7);
+}
+
+/// A root carrying one `.gitignore`, so the watcher's ignore matcher has
+/// something to read.
+fn watch_root() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rustelier-watch-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".gitignore"), "build/\n*.log\n").unwrap();
+    dir
+}
+
+#[test]
+fn a_write_asks_for_git_only_and_a_rename_asks_for_the_index() {
+    use notify::event::{CreateKind, DataChange, EventKind, ModifyKind, RenameMode};
+
+    let root = watch_root();
+    let write = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+    let create = EventKind::Create(CreateKind::File);
+    let rename = EventKind::Modify(ModifyKind::Name(RenameMode::Any));
+
+    // Saving an existing file cannot change the file set, so the expensive
+    // index walk must be skipped.
+    assert_eq!(
+        watch::classify_for_test(&root, &root.join("src/main.rs"), &write),
+        Some((false, true))
+    );
+    assert_eq!(
+        watch::classify_for_test(&root, &root.join("src/main.rs"), &create),
+        Some((true, true))
+    );
+    assert_eq!(
+        watch::classify_for_test(&root, &root.join("src/main.rs"), &rename),
+        Some((true, true))
+    );
+}
+
+#[test]
+fn ignored_trees_never_reach_the_debouncer() {
+    use notify::event::{CreateKind, EventKind};
+
+    let root = watch_root();
+    let create = EventKind::Create(CreateKind::File);
+    let dropped = [
+        "target/debug/rustelier",
+        "node_modules/pkg/index.js",
+        "docs/dist/bundle.js",
+        // Matched by the fixture's own .gitignore.
+        "build/output.o",
+        "run.log",
+    ];
+
+    for path in dropped {
+        assert_eq!(
+            watch::classify_for_test(&root, &root.join(path), &create),
+            None,
+            "{path} must be filtered before it costs a walk"
+        );
+    }
+}
+
+#[test]
+fn git_metadata_refreshes_the_snapshot_without_a_walk() {
+    use notify::event::{DataChange, EventKind, ModifyKind};
+
+    let root = watch_root();
+    let write = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+
+    for path in [".git/HEAD", ".git/index", ".git/refs/heads/main"] {
+        assert_eq!(
+            watch::classify_for_test(&root, &root.join(path), &write),
+            Some((false, true)),
+            "{path} changes git state only"
+        );
+    }
+    // Object churn is the bulk of `.git` traffic and no surface reads it.
+    assert_eq!(
+        watch::classify_for_test(&root, &root.join(".git/objects/ab/cdef"), &write),
+        None
+    );
 }
 
 #[test]

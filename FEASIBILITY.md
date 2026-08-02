@@ -129,7 +129,9 @@ by doing less, not by doing it faster.
   what the panel footer now says.
 - Quick Open keeps the previous workspace's results until the next keystroke
   after a workspace switch.
-- The file index goes stale until `Workspace: Rebuild File Index` runs.
+- The file index goes stale in a workspace that is not watched, which is the home
+  directory and the filesystem root. `Workspace: Rebuild File Index` is the fix.
+  Every other workspace now follows the disk; see README > Filesystem Watching.
 - Long unbroken tokens, such as a commit hash, overflow their table cell rather
   than breaking by character.
 - Markdown preview is a tree of block elements, so selection cannot cross blocks.
@@ -155,7 +157,8 @@ written, maintained and hardened for a real port.
 | Predictable sizing inside a scroll container | Absolute frame plus a measured column width | Percentage and flex children resolve against nothing in a scrolling box; three separate blocks disappeared before this was understood |
 | Rounded clipping over a native child view | Not possible | The WebView ignores the clip |
 | Text selection across blocks | Not possible today | No `NSTextStorage` equivalent |
-| Filesystem watching, persistence, restore | Not implemented | All of it |
+| Filesystem watching | 321 lines over `notify`: debounce, ignore filter, per-root attribution, scan coalescing | Plus per-folder invalidation instead of a whole-tree walk, watch limits, network volumes, case-insensitive rename pairing |
+| Persistence and restore | Not implemented | All of it |
 | Accessibility | Partly present, and noisy: the run log fills with `ERROR: getApplicationProperty: called with invalid property` | Must be audited surface by surface |
 
 ## Unstable Or Unversioned APIs Used

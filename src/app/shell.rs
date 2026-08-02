@@ -14,6 +14,7 @@ use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::app::chrome::{icon_button, project_menu, title_bar_drag_strip};
 use crate::app::overlays::OverlayState;
 use crate::app::workspace::Workspace;
+use crate::services::watch::{RootChange, WatchHub};
 use crate::theme::{self, ActiveTokens as _, LayoutMode, Metrics, Radius, Space, Type};
 
 actions!(
@@ -72,6 +73,9 @@ pub struct Shell {
     pub split: Entity<ResizableState>,
     pub overlay: OverlayState,
     pub status: Option<SharedString>,
+    /// `None` when the platform refused a watcher. The Explorer refresh control
+    /// and `Workspace: Rebuild File Index` stay the manual fallback.
+    watch: Option<WatchHub>,
     focus: FocusHandle,
 }
 
@@ -97,36 +101,116 @@ impl Shell {
             split,
             overlay: OverlayState::default(),
             status: None,
+            watch: WatchHub::new(),
             focus: cx.focus_handle(),
         });
-        shell.update(cx, |shell, cx| shell.scan_workspace(0, cx));
+        shell.update(cx, |shell, cx| {
+            shell.observe_watch(cx);
+            shell.watch_workspace(0);
+            shell.scan_workspace(0, true, true, cx);
+        });
         shell
     }
 
-    /// Builds the file index and the Git snapshot for one workspace off the
+    /// Drains the debounced watcher stream for as long as the shell lives.
+    ///
+    /// One task for every workspace: the hub tags each batch with the root it
+    /// came from, so nothing has to be respawned when a workspace is added.
+    fn observe_watch(&mut self, cx: &mut Context<Self>) {
+        let Some(changes) = self.watch.as_ref().map(|hub| hub.changes.clone()) else {
+            return;
+        };
+        cx.spawn(async move |shell, cx| {
+            while let Ok(batch) = changes.recv().await {
+                if shell
+                    .update(cx, |shell, cx| shell.apply_watch(batch, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Registers one workspace root with the watcher.
+    fn watch_workspace(&mut self, index: usize) {
+        let Some(root) = self.workspaces.get(index).map(|w| w.root.clone()) else {
+            return;
+        };
+        if let Some(hub) = self.watch.as_mut() {
+            hub.watch(&root);
+        }
+    }
+
+    fn apply_watch(&mut self, batch: Vec<RootChange>, cx: &mut Context<Self>) {
+        for change in batch {
+            let found = self
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.root == change.root);
+            if let Some(index) = found {
+                self.scan_workspace(index, change.index, change.git, cx);
+            }
+        }
+    }
+
+    /// Rebuilds the file index and the Git snapshot for one workspace off the
     /// main thread.
     ///
     /// Both walk the whole tree. Run inline they block the `open_window`
     /// callback, so a large root means the window is never created at all.
-    fn scan_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(root) = self.workspaces.get(index).map(|w| w.root.clone()) else {
+    /// `index` and `git` are requested separately because the watcher can tell
+    /// a rename from a write, and only a rename changes the file set.
+    fn scan_workspace(
+        &mut self,
+        workspace_index: usize,
+        want_index: bool,
+        want_git: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !want_index && !want_git {
+            return;
+        }
+        let Some(workspace) = self.workspaces.get_mut(workspace_index) else {
             return;
         };
+        // One walk at a time. Anything asked for mid-walk is folded into the
+        // run that follows it.
+        if workspace.scan.running {
+            workspace.scan.queued_index |= want_index;
+            workspace.scan.queued_git |= want_git;
+            return;
+        }
+        workspace.scan.running = true;
+        let root = workspace.root.clone();
+
         cx.spawn(async move |shell, cx| {
             let (files, git) = cx
                 .background_spawn(async move {
                     (
-                        crate::services::file_index::build(&root),
-                        crate::services::git::snapshot(&root),
+                        want_index.then(|| crate::services::file_index::build(&root)),
+                        want_git.then(|| crate::services::git::snapshot(&root)),
                     )
                 })
                 .await;
             shell
                 .update(cx, |shell, cx| {
-                    if let Some(workspace) = shell.workspaces.get_mut(index) {
-                        workspace.apply_scan(files, git);
-                    }
+                    let queued = shell
+                        .workspaces
+                        .get_mut(workspace_index)
+                        .map(|workspace| {
+                            workspace.apply_scan(files, git);
+                            workspace.scan.running = false;
+                            let queued =
+                                (workspace.scan.queued_index, workspace.scan.queued_git);
+                            workspace.scan.queued_index = false;
+                            workspace.scan.queued_git = false;
+                            queued
+                        })
+                        .unwrap_or((false, false));
                     cx.notify();
+                    shell.scan_workspace(workspace_index, queued.0, queued.1, cx);
                 })
                 .ok();
         })
@@ -147,11 +231,18 @@ impl Shell {
     }
 
     fn select_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.workspaces.len() && index != self.active {
-            self.active = index;
-            self.workspace_mut().refresh_git();
-            cx.notify();
+        if index >= self.workspaces.len() || index == self.active {
+            return;
         }
+        self.active = index;
+        // A watched workspace is already current, so switching costs nothing.
+        // Without a watcher the snapshot is stale, and reading it here would
+        // walk the whole tree on the main thread, so it goes to the background.
+        let watched = self.watch.is_some();
+        if !watched {
+            self.scan_workspace(index, false, true, cx);
+        }
+        cx.notify();
     }
 
     /// Opens the native folder picker, then opens the chosen folder as a
@@ -223,7 +314,8 @@ impl Shell {
         let workspace = Workspace::open(root, window, cx);
         self.workspaces.push(workspace);
         self.active = self.workspaces.len() - 1;
-        self.scan_workspace(self.active, cx);
+        self.watch_workspace(self.active);
+        self.scan_workspace(self.active, true, true, cx);
         cx.notify();
     }
 
@@ -307,7 +399,11 @@ impl Shell {
             Ok(()) => self.set_status("saved"),
             Err(err) => self.set_status(format!("save failed: {err}")),
         }
-        self.workspace_mut().refresh_git();
+        // The watcher sees the write and refreshes off the main thread. Reading
+        // the status here as well would walk the tree on every Cmd-S.
+        if self.watch.is_none() {
+            self.workspace_mut().refresh_git();
+        }
         cx.notify();
     }
 

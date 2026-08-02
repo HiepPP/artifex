@@ -19,17 +19,18 @@ writes to it.
 ```bash
 ./scripts/build.sh              # build + icon + bundle; use this, not bare cargo build
 ./scripts/build.sh release
-cargo test                      # non-UI tests only, no display needed
-cargo test file_tree_expands_lazily     # single test by name
-cargo clippy --all-targets
-cargo fmt
+./scripts/test.sh               # non-UI tests only, no display needed
+./scripts/test.sh file_tree_expands_lazily   # args pass through: single test
 ./scripts/bundle.sh debug       # re-wrap an existing binary into dist/Rustelier.app
 ```
 
-`scripts/build.sh` exists because a Homebrew `rustc` earlier on `PATH` shadows
-the rustup toolchain, and the build then fails on `edition2024`. It prepends the
-pinned toolchain's bin directory. Bare `cargo build` works only when `PATH` is
-already clean.
+Use the scripts, not bare cargo. A Homebrew `rustc` earlier on `PATH` shadows
+the rustup toolchain even when cargo itself comes from rustup, so `cargo build`
+and `cargo test` fail with `feature 'edition2024' is required`. `rustup run
+1.97.1` does not fix it either - cargo resolves its `rustc` through `PATH`, not
+through `RUSTUP_TOOLCHAIN`. Both scripts set `PATH` and `RUSTC` explicitly. For
+anything else (`cargo clippy`, `cargo fmt`), copy that prologue or clean `PATH`
+first.
 
 ### Running
 
@@ -78,9 +79,27 @@ Phase 0 gates (`src/gates/`) and the application shell (`src/app/shell.rs`).
   and, for Markdown, a pre-parsed `MarkdownView`, so the document is parsed once
   per open rather than once per frame.
 
-`Shell::scan_workspace` builds the file index and git snapshot on a background
+`Shell::scan_workspace` rebuilds the file index and git snapshot on a background
 task. Both walk the whole tree; run inline they block the `open_window`
-callback and the window is never created.
+callback and the window is never created. It takes the two refreshes as separate
+flags and keeps one walk per workspace in flight, folding anything requested
+mid-walk into the next run.
+
+### Staying Fresh
+
+[services/watch.rs](src/services/watch.rs) drives that scan. One recursive
+FSEvents watch per root, one debounce thread for all of them, feeding
+`Shell::apply_watch` over an `async-channel`.
+
+The filters are the whole point - a refresh is a full tree walk, so it must stay
+rare. Paths under `HARD_IGNORES` or the root `.gitignore` are dropped before the
+debouncer. Under `.git` only `HEAD`, `index`, `ORIG_HEAD`, `MERGE_HEAD` and
+`refs` survive. Only a create, remove, or rename asks for an index rebuild; a
+plain write asks for a Git snapshot alone. `DESIGN.md` > Filesystem Freshness is
+the contract; change it before changing this behavior.
+
+The home directory and the filesystem root are never watched, so a workspace
+opened there still needs the Explorer refresh control.
 
 ### Layers
 
@@ -178,7 +197,7 @@ the full checklist; the minimum for any UI change:
 
 ```bash
 ./scripts/build.sh
-cargo test
+./scripts/test.sh
 ```
 
 Then launch the bundle and drive the changed surface. Check light and dark when

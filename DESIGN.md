@@ -505,6 +505,40 @@ instead of promising a key that cannot arrive.
 Divergence: no branch picker, no discard, no upstream counts, no image diffs,
 and no commit-message generation.
 
+## Filesystem Freshness
+
+Every surface reads the workspace as it is on disk. A file created, renamed, or
+deleted outside the application appears without a manual refresh, and so does a
+change to Git status.
+
+The rules below exist because the refresh is a full tree walk, and the walk must
+stay rare enough that an idle workspace costs nothing.
+
+- Use one recursive watch per workspace root and one debounce thread for all of
+  them. On macOS this resolves to FSEvents, which is kernel driven, so an idle
+  workspace does no polling and holds no per-folder descriptor.
+- Refuse to watch the home directory or the filesystem root. A recursive watch
+  there covers caches and every other application's state, and none of it is
+  about a workspace.
+- Drop a path under the hard ignore list or the root `.gitignore` before it
+  reaches the debouncer. A build must cost nothing.
+- Under `.git`, keep only `HEAD`, `index`, `ORIG_HEAD`, `MERGE_HEAD`, and
+  `refs`. Object writes are the bulk of the traffic and no surface reads them.
+- Separate the two refreshes. Only a create, a remove, or a rename can change
+  the file set, so a plain write asks for a Git snapshot and no index walk.
+- Coalesce a burst into one batch per root. One editor save is a write, a rename
+  and a chmod, and they have to land as one refresh.
+- Run one walk per workspace at a time. Fold a request that arrives mid-walk
+  into the run that follows it.
+- Never walk on the main thread in response to a watched event.
+- Keep the Explorer refresh control and `Workspace: Rebuild File Index`. They are
+  the fallback when the platform refuses a watcher, and the only path for a root
+  that is not watched.
+
+Divergence: nested `.gitignore` files are not read by the watcher's own filter.
+The walk that follows honours them, so the only cost is a rebuild that finds
+nothing new.
+
 ## GPUI Layout Rules
 
 These rules come from defects found in this build. GPUI's layout is close to
@@ -597,10 +631,13 @@ partial implementation.
 Every UI change must pass these before it is called done.
 
 ```bash
-cargo build
-cargo test
-./scripts/bundle.sh
+./scripts/build.sh
+./scripts/test.sh
 ```
+
+Use the scripts, not bare cargo. A Homebrew `rustc` earlier on `PATH` shadows
+the pinned toolchain and the build fails on `edition2024`; `rustup run` does not
+fix it, because cargo resolves its `rustc` through `PATH`.
 
 GPUI needs a real `.app` bundle on macOS to activate, own a menu bar, and
 receive input-method events. An unbundled binary cannot verify text input.
@@ -617,6 +654,9 @@ Native checks:
   changes. The terminal process must survive.
 - Hover every new clickable control and confirm the pointing hand covers its full
   hit target.
+- Create, rename and delete a file outside the application when the watcher or a
+  refresh path changes. The Explorer must follow without a manual refresh, and a
+  build inside the workspace must not trigger one.
 - Confirm the process reports no panic in its output.
 
 ## Source of Truth
@@ -636,6 +676,7 @@ Native checks:
 | Markdown preview | [src/app/markdown.rs](src/app/markdown.rs) |
 | Terminal | [src/terminal/mod.rs](src/terminal/mod.rs) |
 | Git | [src/services/git.rs](src/services/git.rs) |
+| Filesystem watching | [src/services/watch.rs](src/services/watch.rs) |
 | Parent design contract | `atelier/DESIGN.md` |
 
 Update this document when a shared token, breakpoint, component contract, or

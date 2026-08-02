@@ -60,6 +60,18 @@ impl Tab {
     }
 }
 
+/// Keeps one background walk per workspace at a time.
+///
+/// A watcher burst can ask for a rescan while the previous one is still
+/// walking. Running both would double the CPU cost for one result, so a request
+/// that arrives mid-walk is folded into the next one instead.
+#[derive(Default)]
+pub struct ScanState {
+    pub running: bool,
+    pub queued_index: bool,
+    pub queued_git: bool,
+}
+
 pub struct Workspace {
     pub root: PathBuf,
     pub name: String,
@@ -79,6 +91,7 @@ pub struct Workspace {
     /// on direct text entry, with no extra chrome inside the card.
     pub commit_input: Entity<InputState>,
     pub pushing: bool,
+    pub scan: ScanState,
     next_id: usize,
 }
 
@@ -111,6 +124,7 @@ impl Workspace {
             selected: 0,
             commit_input,
             pushing: false,
+            scan: ScanState::default(),
             next_id: 0,
             root,
             name,
@@ -142,10 +156,16 @@ impl Workspace {
         self.set_index(file_index::build(&self.root));
     }
 
-    /// Applies a scan built off the main thread.
-    pub fn apply_scan(&mut self, files: Vec<IndexedFile>, git: GitSnapshot) {
-        self.git = git;
-        self.set_index(files);
+    /// Applies a scan built off the main thread. Each half is absent when the
+    /// request did not ask for it, so a plain file write costs a Git snapshot
+    /// and no tree walk.
+    pub fn apply_scan(&mut self, files: Option<Vec<IndexedFile>>, git: Option<GitSnapshot>) {
+        if let Some(git) = git {
+            self.git = git;
+        }
+        if let Some(files) = files {
+            self.set_index(files);
+        }
     }
 
     fn set_index(&mut self, files: Vec<IndexedFile>) {
