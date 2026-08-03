@@ -10,9 +10,10 @@ Rust + GPUI, and what it costs. `FEASIBILITY.md` holds the verdict ("not yet")
 and the measured defect list.
 
 Scope is fixed by `DESIGN.md` > Scope. An out-of-scope area must stay absent.
-Do not add a partial agent panel, MCP surface, diagnostics writer, or
-persistence layer. `../atelier` is read-only from here; nothing in this repo
-writes to it.
+Do not add a partial agent panel, MCP surface, or diagnostics writer. Session
+persistence (open workspaces and file tabs) is in scope; catalog persistence
+is not. `../atelier` is read-only from here; nothing in this repo writes to
+it.
 
 ## Commands
 

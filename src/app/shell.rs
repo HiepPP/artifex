@@ -1,6 +1,6 @@
 //! Application shell: workspace rail, three-pane split, status bar.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
 use gpui::{
@@ -14,7 +14,10 @@ use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{icon_button, project_menu};
 use crate::app::overlays::OverlayState;
-use crate::app::workspace::Workspace;
+use crate::app::editor::EditorView;
+use crate::app::workspace::{FileMode, TabKind, Workspace};
+use crate::services::git;
+use crate::services::session;
 use crate::services::watch::{RootChange, WatchHub};
 use crate::theme::{self, ActiveTokens as _, LayoutMode, Metrics, Radius, Space, Type};
 
@@ -38,6 +41,15 @@ actions!(
         CancelOverlay,
         AddWorkspace,
         NextWorkspace,
+        CommitPush,
+        RevealInExplorer,
+        NavigateBack,
+        NavigateForward,
+        FindInFile,
+        FindReplace,
+        FindNext,
+        FindPrev,
+        InsertFileReference,
         Workspace1,
         Workspace2,
         Workspace3,
@@ -78,39 +90,177 @@ pub struct Shell {
     /// and `Workspace: Rebuild File Index` stay the manual fallback.
     watch: Option<WatchHub>,
     focus: FocusHandle,
+    /// Last session snapshot written to disk. Render compares against it so
+    /// only a real state change costs a write.
+    last_session: Option<session::SessionState>,
 }
 
 impl Shell {
     pub fn build(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        let root = resolve_root();
-        eprintln!("artifex: workspace root {}", root.display());
-
         let split = cx.new(|_| ResizableState::default());
-        let workspace = Workspace::open(root, window, cx);
-        let dark = gpui_component::Theme::global(cx).is_dark();
+        let state = session::load();
+        let (workspaces, active) = Self::restore_session(state.as_ref(), window, cx);
+
+        let dark = match state.as_ref().and_then(|state| state.dark) {
+            Some(dark) => {
+                theme::set_dark(dark, cx);
+                dark
+            }
+            None => gpui_component::Theme::global(cx).is_dark(),
+        };
+        let shows_sidebar = state.as_ref().is_none_or(|state| state.shows_sidebar);
+        let shows_inspector = state.as_ref().is_some_and(|state| state.shows_inspector);
+        let sidebar_tab = match state.as_ref().map(|state| state.sidebar_tab) {
+            Some(session::SidebarTabState::Git) => SidebarTab::Git,
+            _ => SidebarTab::Explorer,
+        };
+        let zoom = state
+            .as_ref()
+            .map_or(1.0, |state| state.zoom.clamp(0.8, 2.0));
 
         let shell = cx.new(|cx| Self {
-            workspaces: vec![workspace],
-            active: 0,
-            shows_sidebar: true,
-            shows_inspector: false,
-            sidebar_tab: SidebarTab::Explorer,
+            workspaces,
+            active,
+            shows_sidebar,
+            shows_inspector,
+            sidebar_tab,
             focus_mode: false,
             layout: LayoutMode::Standard,
-            zoom: 1.0,
+            zoom,
             dark,
             split,
             overlay: OverlayState::default(),
             status: None,
             watch: WatchHub::new(),
             focus: cx.focus_handle(),
+            last_session: None,
         });
         shell.update(cx, |shell, cx| {
             shell.observe_watch(cx);
-            shell.watch_workspace(0);
-            shell.scan_workspace(0, true, true, cx);
+            for index in 0..shell.workspaces.len() {
+                shell.watch_workspace(index);
+                shell.scan_workspace(index, true, true, cx);
+            }
         });
         shell
+    }
+
+    /// Reopens the workspaces and file tabs from the previous session, per
+    /// `DESIGN.md` > Session Persistence. A missing session file, a deleted
+    /// root, or a deleted file each degrade silently: the entry is skipped,
+    /// and with nothing left the shell falls back to `resolve_root`.
+    fn restore_session(
+        state: Option<&session::SessionState>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (Vec<Workspace>, usize) {
+        let mut workspaces: Vec<Workspace> = Vec::new();
+        let mut active = 0;
+
+        if let Some(state) = state {
+            active = state.active;
+            for saved in &state.workspaces {
+                if !saved.root.is_dir() {
+                    continue;
+                }
+                let mut workspace = Workspace::open(saved.root.clone(), window, cx);
+                // `repo_root` can fold two saved paths into one root.
+                if workspaces.iter().any(|open| open.root == workspace.root) {
+                    continue;
+                }
+                for file in &saved.files {
+                    if !file.path.is_file() {
+                        continue;
+                    }
+                    workspace.open_file(file.path.clone(), false, cx);
+                    if let Some(tab) = workspace.tabs.last_mut()
+                        && let TabKind::File {
+                            mode, preview_view, ..
+                        } = &mut tab.kind
+                    {
+                        *mode = if file.preview && preview_view.is_some() {
+                            FileMode::Preview
+                        } else {
+                            FileMode::Source
+                        };
+                    }
+                }
+                let restored = saved.selected.as_ref().and_then(|path| {
+                    workspace
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.file_path() == Some(path.as_path()))
+                });
+                let terminal = workspace.tabs.iter().position(|tab| tab.is_terminal());
+                if let Some(index) = restored.or(terminal) {
+                    workspace.selected = index;
+                }
+                workspaces.push(workspace);
+            }
+        }
+
+        if workspaces.is_empty() {
+            let root = resolve_root();
+            eprintln!("artifex: workspace root {}", root.display());
+            workspaces.push(Workspace::open(root, window, cx));
+        }
+        let active = active.min(workspaces.len() - 1);
+        (workspaces, active)
+    }
+
+    /// Writes the session to disk when it differs from the last write.
+    ///
+    /// Called from `render`, so every state change that notifies is caught
+    /// without threading a persist call through each mutation site. The
+    /// snapshot is a handful of paths, so building it per frame is cheap.
+    fn persist_session(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.session_snapshot();
+        if self.last_session.as_ref() == Some(&snapshot) {
+            return;
+        }
+        self.last_session = Some(snapshot.clone());
+        cx.background_spawn(async move {
+            session::save(&snapshot);
+        })
+        .detach();
+    }
+
+    fn session_snapshot(&self) -> session::SessionState {
+        let workspaces = self
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                let files = workspace
+                    .tabs
+                    .iter()
+                    .filter_map(|tab| match &tab.kind {
+                        TabKind::File { path, mode, .. } => Some(session::FileTabState {
+                            path: path.clone(),
+                            preview: matches!(mode, FileMode::Preview),
+                        }),
+                        _ => None,
+                    })
+                    .collect();
+                let selected = workspace
+                    .selected_tab()
+                    .and_then(|tab| tab.file_path().map(Path::to_path_buf));
+                session::WorkspaceState {
+                    root: workspace.root.clone(),
+                    selected,
+                    files,
+                }
+            })
+            .collect();
+        let mut state = session::SessionState::new(self.active, workspaces);
+        state.shows_sidebar = self.shows_sidebar;
+        state.shows_inspector = self.shows_inspector;
+        state.sidebar_tab = match self.sidebar_tab {
+            SidebarTab::Explorer => session::SidebarTabState::Explorer,
+            SidebarTab::Git => session::SidebarTabState::Git,
+        };
+        state.zoom = self.zoom;
+        state.dark = Some(self.dark);
+        state
     }
 
     /// Drains the debounced watcher stream for as long as the shell lives.
@@ -240,6 +390,131 @@ impl Shell {
 
     pub fn set_status(&mut self, text: impl Into<SharedString>) {
         self.status = Some(text.into());
+    }
+
+    fn active_editor(&self) -> Option<Entity<EditorView>> {
+        match self.workspace().selected_tab().map(|tab| &tab.kind) {
+            Some(TabKind::File { editor, .. }) => Some(editor.clone()),
+            _ => None,
+        }
+    }
+
+    /// Stages, commits and pushes, in that order. One path for the Git panel
+    /// button and `Cmd-Return`.
+    pub(crate) fn push_commit(&mut self, cx: &mut Context<Self>) {
+        if self.workspace().pushing {
+            return;
+        }
+        let subject = self
+            .workspace()
+            .commit_input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let root = self.workspace().root.clone();
+        self.workspace_mut().pushing = true;
+        match git::commit_and_push(&root, &subject) {
+            Ok(message) => self.set_status(message),
+            Err(err) => self.set_status(err),
+        }
+        self.workspace_mut().pushing = false;
+        self.workspace_mut().refresh_git();
+        cx.notify();
+    }
+
+    fn on_commit_push(&mut self, _: &CommitPush, _: &mut Window, cx: &mut Context<Self>) {
+        self.push_commit(cx);
+    }
+
+    /// Shows the active file in the Explorer: opens the sidebar on the
+    /// Explorer tab and expands the tree down to the file.
+    fn on_reveal_in_explorer(
+        &mut self,
+        _: &RevealInExplorer,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self
+            .workspace()
+            .selected_tab()
+            .and_then(|tab| tab.file_path().map(Path::to_path_buf))
+        else {
+            return;
+        };
+        self.shows_sidebar = true;
+        self.sidebar_tab = SidebarTab::Explorer;
+        self.workspace_mut().tree.reveal(&path);
+        cx.notify();
+    }
+
+    fn on_navigate_back(&mut self, _: &NavigateBack, _: &mut Window, cx: &mut Context<Self>) {
+        self.workspace_mut().navigate(-1, cx);
+        cx.notify();
+    }
+
+    fn on_navigate_forward(&mut self, _: &NavigateForward, _: &mut Window, cx: &mut Context<Self>) {
+        self.workspace_mut().navigate(1, cx);
+        cx.notify();
+    }
+
+    fn on_find_in_file(&mut self, _: &FindInFile, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor() {
+            editor.update(cx, |editor, cx| editor.open_find(false, window, cx));
+        }
+    }
+
+    fn on_find_replace(&mut self, _: &FindReplace, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor() {
+            editor.update(cx, |editor, cx| editor.open_find(true, window, cx));
+        }
+    }
+
+    fn on_find_next(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor() {
+            editor.update(cx, |editor, cx| editor.find_step(1, cx));
+        }
+    }
+
+    fn on_find_prev(&mut self, _: &FindPrev, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor() {
+            editor.update(cx, |editor, cx| editor.find_step(-1, cx));
+        }
+    }
+
+    /// Types `path:line` for the active file into the workspace terminal and
+    /// selects it, the way the parent app references editor selections.
+    fn on_insert_file_reference(
+        &mut self,
+        _: &InsertFileReference,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self.active_editor() else {
+            return;
+        };
+        let (path, line) = {
+            let editor = editor.read(cx);
+            (editor.path.clone(), editor.cursor_line())
+        };
+        let root = self.workspace().root.clone();
+        let display = path.strip_prefix(&root).unwrap_or(&path).display();
+        let reference = format!("{display}:{line} ");
+
+        let terminal = self
+            .workspace()
+            .tabs
+            .iter()
+            .position(|tab| tab.is_terminal());
+        let Some(index) = terminal else {
+            return;
+        };
+        if let Some(TabKind::Terminal(view)) = self.workspace().tabs.get(index).map(|tab| &tab.kind)
+        {
+            view.read(cx).session.write(reference.into_bytes());
+        }
+        self.workspace_mut().selected = index;
+        cx.notify();
     }
 
     fn select_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -946,6 +1221,7 @@ impl Focusable for Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.persist_session(cx);
         let c = cx.tokens().c;
         let title_inset = theme::title_bar_inset(window);
         let width = f32::from(window.viewport_size().width) - f32::from(Metrics::RAIL_WIDTH);
@@ -974,6 +1250,15 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_new_terminal))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_save))
+            .on_action(cx.listener(Self::on_commit_push))
+            .on_action(cx.listener(Self::on_reveal_in_explorer))
+            .on_action(cx.listener(Self::on_navigate_back))
+            .on_action(cx.listener(Self::on_navigate_forward))
+            .on_action(cx.listener(Self::on_find_in_file))
+            .on_action(cx.listener(Self::on_find_replace))
+            .on_action(cx.listener(Self::on_find_next))
+            .on_action(cx.listener(Self::on_find_prev))
+            .on_action(cx.listener(Self::on_insert_file_reference))
             .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
@@ -1104,6 +1389,23 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-=", ZoomIn, None),
         KeyBinding::new("cmd--", ZoomOut, None),
         KeyBinding::new("cmd-0", AddWorkspace, None),
+        // Parent app binds both Cmd-O and Cmd-0 to the same open action.
+        KeyBinding::new("cmd-o", AddWorkspace, None),
+        // Shift folds into the produced character: Cmd-Shift-; arrives as ":".
+        KeyBinding::new("cmd-:", NewTerminal, None),
+        KeyBinding::new("cmd-enter", CommitPush, None),
+        KeyBinding::new("cmd-b", RevealInExplorer, None),
+        KeyBinding::new("ctrl--", NavigateBack, None),
+        // GPUI folds Shift into the produced character for punctuation keys,
+        // so Ctrl-Shift-- is indistinguishable from Ctrl--. Forward moves to
+        // the neighbouring unshifted key instead; DESIGN.md records the
+        // divergence.
+        KeyBinding::new("ctrl-=", NavigateForward, None),
+        KeyBinding::new("cmd-f", FindInFile, None),
+        KeyBinding::new("cmd-alt-f", FindReplace, None),
+        KeyBinding::new("cmd-g", FindNext, None),
+        KeyBinding::new("cmd-shift-g", FindPrev, None),
+        KeyBinding::new("cmd-shift-c", InsertFileReference, None),
         KeyBinding::new("cmd-`", NextWorkspace, None),
         KeyBinding::new("escape", CancelOverlay, None),
         // A plain Escape never arrives while a text field holds focus: macOS

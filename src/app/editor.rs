@@ -12,10 +12,12 @@ use gpui::{
     IntoElement, KeyDownEvent, ParentElement, Pixels, Render, SharedString, Styled as _,
     StyledText, UTF16Selection, UniformListScrollHandle, Window, canvas, div, px, uniform_list,
 };
-use gpui_component::{h_flex, v_flex};
+use gpui_component::input::{Input, InputState};
+use gpui_component::{Sizable as _, h_flex, v_flex};
 
 use crate::services::highlight::{Highlighter, Lang, line_starts};
-use crate::theme::{ActiveTokens as _, Space, Type};
+use crate::services::search::{LineMatch, find_in_lines};
+use crate::theme::{ActiveTokens as _, Radius, Space, Type};
 
 const GUTTER_WIDTH: Pixels = px(56.);
 
@@ -32,9 +34,22 @@ pub struct EditorView {
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     marked: Option<String>,
+    find: Option<FindState>,
     /// Rows the list asked for on the last frame. Reported by the POC so the
     /// viewport claim is measurable rather than asserted.
     pub last_visible: std::cell::Cell<(usize, usize)>,
+}
+
+/// Find bar state. Created on first `Cmd-F`, dropped on close.
+struct FindState {
+    query: Entity<InputState>,
+    replace: Entity<InputState>,
+    show_replace: bool,
+    matches: Vec<LineMatch>,
+    active: usize,
+    /// Query text the matches were computed for. Render recomputes when the
+    /// input no longer agrees.
+    cached: String,
 }
 
 impl EditorView {
@@ -59,8 +74,121 @@ impl EditorView {
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             marked: None,
+            find: None,
             last_visible: std::cell::Cell::new((0, 0)),
         })
+    }
+
+    /// The 1-based line the cursor sits on, for `path:line` references.
+    pub fn cursor_line(&self) -> usize {
+        self.cursor_row + 1
+    }
+
+    /// Opens the find bar, or focuses it when already open. `with_replace`
+    /// also shows the replace row.
+    pub fn open_find(&mut self, with_replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_none() {
+            let query = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
+            let replace = cx.new(|cx| InputState::new(window, cx).placeholder("Replace"));
+            self.find = Some(FindState {
+                query,
+                replace,
+                show_replace: false,
+                matches: Vec::new(),
+                active: 0,
+                cached: String::new(),
+            });
+        }
+        if let Some(find) = self.find.as_mut() {
+            find.show_replace = find.show_replace || with_replace;
+            let handle = find.query.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn find_open(&self) -> bool {
+        self.find.is_some()
+    }
+
+    pub fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.take().is_some() {
+            window.focus(&self.focus, cx);
+            cx.notify();
+        }
+    }
+
+    /// Moves the active match by `step` (1 next, -1 previous), wrapping.
+    pub fn find_step(&mut self, step: isize, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        let count = find.matches.len();
+        if count == 0 {
+            return;
+        }
+        find.active = (find.active as isize + step).rem_euclid(count as isize) as usize;
+        let hit = find.matches[find.active];
+        self.reveal_match(hit);
+        cx.notify();
+    }
+
+    fn reveal_match(&mut self, hit: LineMatch) {
+        self.cursor_row = hit.row.min(self.lines.len().saturating_sub(1));
+        self.cursor_byte = hit.start;
+        self.scroll
+            .scroll_to_item(self.cursor_row, gpui::ScrollStrategy::Center);
+    }
+
+    /// Replaces the active match, or every match with `all`.
+    pub fn replace_active(&mut self, all: bool, cx: &mut Context<Self>) {
+        self.refresh_matches(cx);
+        let Some(find) = self.find.as_ref() else {
+            return;
+        };
+        if find.matches.is_empty() {
+            return;
+        }
+        let replacement = find.replace.read(cx).value().to_string();
+        let targets: Vec<LineMatch> = if all {
+            find.matches.clone()
+        } else {
+            vec![find.matches[find.active]]
+        };
+        // Back to front so earlier ranges stay valid while later ones change.
+        for hit in targets.iter().rev() {
+            let Some(line) = self.lines.get_mut(hit.row) else {
+                continue;
+            };
+            if hit.end <= line.len() {
+                line.replace_range(hit.start..hit.end, &replacement);
+            }
+        }
+        self.reindex();
+        if let Some(find) = self.find.as_mut() {
+            // Force a recompute against the edited buffer.
+            find.cached = String::new();
+        }
+        self.refresh_matches(cx);
+        cx.notify();
+    }
+
+    /// Recomputes matches when the query text changed since the last pass.
+    fn refresh_matches(&mut self, cx: &App) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        let query = find.query.read(cx).value().to_string();
+        if query == find.cached {
+            return;
+        }
+        find.matches = find_in_lines(&self.lines, &query);
+        find.active = 0;
+        find.cached = query;
+        if let Some(hit) = find.matches.first().copied() {
+            self.reveal_match(hit);
+        }
     }
 
     pub fn line_count(&self) -> usize {
@@ -251,6 +379,7 @@ impl EditorView {
                     })
                     .unwrap_or_default();
 
+                let highlights = self.overlay_find_matches(row, highlights, text.len(), cx);
                 let is_cursor_row = row == self.cursor_row;
                 h_flex()
                     .w_full()
@@ -271,6 +400,137 @@ impl EditorView {
             })
             .collect()
     }
+
+    /// Lays the find matches over the syntax highlights for one row. Ranges
+    /// handed to `StyledText` must not overlap, so syntax spans are clipped
+    /// around every match before the match styles are added.
+    fn overlay_find_matches(
+        &self,
+        row: usize,
+        syntax: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+        line_len: usize,
+        cx: &App,
+    ) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+        let Some(find) = self.find.as_ref() else {
+            return syntax;
+        };
+        let hits: Vec<(std::ops::Range<usize>, bool)> = find
+            .matches
+            .iter()
+            .enumerate()
+            .filter(|(_, hit)| hit.row == row && hit.end <= line_len)
+            .map(|(index, hit)| (hit.start..hit.end, index == find.active))
+            .collect();
+        if hits.is_empty() {
+            return syntax;
+        }
+
+        let c = cx.tokens().c;
+        let mut merged: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+        for (range, style) in syntax {
+            let mut cursor = range.start;
+            for (hit, _) in &hits {
+                if hit.end <= cursor || hit.start >= range.end {
+                    continue;
+                }
+                if hit.start > cursor {
+                    merged.push((cursor..hit.start, style));
+                }
+                cursor = hit.end.min(range.end);
+            }
+            if cursor < range.end {
+                merged.push((cursor..range.end, style));
+            }
+        }
+        for (hit, active) in hits {
+            merged.push((
+                hit,
+                HighlightStyle {
+                    color: active.then_some(c.accent_ink),
+                    background_color: Some(if active { c.accent } else { c.selection }),
+                    ..Default::default()
+                },
+            ));
+        }
+        merged.sort_by_key(|(range, _)| range.start);
+        merged
+    }
+
+    fn render_find_bar(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
+        let find = self.find.as_ref()?;
+        let c = cx.tokens().c;
+        let counter = if find.cached.is_empty() {
+            String::new()
+        } else if find.matches.is_empty() {
+            "0".to_string()
+        } else {
+            format!("{}/{}", find.active + 1, find.matches.len())
+        };
+
+        let button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .px(Space::S)
+                .py(px(2.))
+                .rounded(Radius::CONTROL)
+                .border_1()
+                .border_color(c.border)
+                .text_size(Type::MICRO)
+                .child(label)
+        };
+
+        Some(
+            v_flex()
+                .absolute()
+                .top(Space::S)
+                .right(Space::M)
+                .p(Space::S)
+                .gap(Space::S)
+                .rounded(Radius::CONTROL)
+                .border_1()
+                .border_color(c.border)
+                .bg(c.canvas)
+                .shadow(crate::app::chrome::shadow_floating())
+                .child(
+                    h_flex()
+                        .gap(Space::S)
+                        .items_center()
+                        .child(div().w(px(200.)).child(Input::new(&find.query).xsmall()))
+                        .child(
+                            div()
+                                .text_size(Type::MICRO)
+                                .text_color(c.ink_secondary)
+                                .font_family("JetBrains Mono")
+                                .child(SharedString::from(counter)),
+                        )
+                        .child(button("find-prev", "<").on_click(cx.listener(
+                            |this, _, _, cx| this.find_step(-1, cx),
+                        )))
+                        .child(button("find-next", ">").on_click(cx.listener(
+                            |this, _, _, cx| this.find_step(1, cx),
+                        )))
+                        .child(button("find-close", "x").on_click(cx.listener(
+                            |this, _, window, cx| this.close_find(window, cx),
+                        ))),
+                )
+                .when(find.show_replace, |this| {
+                    this.child(
+                        h_flex()
+                            .gap(Space::S)
+                            .items_center()
+                            .child(div().w(px(200.)).child(Input::new(&find.replace).xsmall()))
+                            .child(button("replace-one", "Replace").on_click(cx.listener(
+                                |this, _, _, cx| this.replace_active(false, cx),
+                            )))
+                            .child(button("replace-all", "All").on_click(cx.listener(
+                                |this, _, _, cx| this.replace_active(true, cx),
+                            ))),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
 }
 
 impl Focusable for EditorView {
@@ -281,6 +541,7 @@ impl Focusable for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_matches(cx);
         let c = cx.tokens().c;
         let entity = cx.entity();
         let count = self.lines.len();
@@ -318,6 +579,7 @@ impl Render for EditorView {
                 .size_full()
                 .p(Space::S),
             )
+            .when_some(self.render_find_bar(cx), |this, bar| this.child(bar))
             .when_some(self.marked.clone(), |this, text| {
                 this.child(
                     v_flex()

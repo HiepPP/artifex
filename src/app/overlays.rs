@@ -176,6 +176,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // With no overlay up, Escape closes the editor's find bar instead.
+        if self.overlay.kind.is_none() {
+            let editor = match self.workspace().selected_tab().map(|tab| &tab.kind) {
+                Some(crate::app::workspace::TabKind::File { editor, .. }) => Some(editor.clone()),
+                _ => None,
+            };
+            if let Some(editor) = editor
+                && editor.read(cx).find_open()
+            {
+                editor.update(cx, |editor, cx| editor.close_find(window, cx));
+                return;
+            }
+        }
         self.close_overlay(window, cx);
     }
 

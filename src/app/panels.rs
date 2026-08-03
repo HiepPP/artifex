@@ -363,25 +363,7 @@ impl Shell {
                                 .when(pushing, |this| this.opacity(0.45))
                                 .child(if pushing { "Pushing..." } else { "Push" })
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.workspace().pushing {
-                                        return;
-                                    }
-                                    let subject = this
-                                        .workspace()
-                                        .commit_input
-                                        .read(cx)
-                                        .value()
-                                        .trim()
-                                        .to_string();
-                                    let root = this.workspace().root.clone();
-                                    this.workspace_mut().pushing = true;
-                                    match git::commit_and_push(&root, &subject) {
-                                        Ok(message) => this.set_status(message),
-                                        Err(err) => this.set_status(err),
-                                    }
-                                    this.workspace_mut().pushing = false;
-                                    this.workspace_mut().refresh_git();
-                                    cx.notify();
+                                    this.push_commit(cx);
                                 })),
                         ),
                 )

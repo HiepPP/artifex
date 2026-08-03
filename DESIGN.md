@@ -33,7 +33,8 @@ what this build carries.
 | Agent panel, MCP, Gemma sidecar, Watchtower | Out of scope. No language model is called |
 | Runtime diagnostics probe, `atelier-doctor` | Out of scope |
 | Layout profiles, display sizing tiers | Out of scope |
-| Session and catalog persistence | Out of scope. Every session starts empty |
+| Session persistence | In scope: open workspaces and file tabs. See Session Persistence |
+| Catalog persistence | Out of scope |
 | Motion tokens | Declared below, not implemented. See Motion |
 
 An out-of-scope area must stay absent. Do not add a partial agent surface or a
@@ -576,9 +577,15 @@ CSS flexbox but not identical, and each rule below cost a visible bug.
 | Shortcut | Action |
 |---|---|
 | `Cmd-1` .. `Cmd-9` | Select workspace by rail position |
-| `Cmd-0` | Add Workspace, through the folder picker |
+| `Cmd-0`, `Cmd-O` | Add Workspace, through the folder picker |
 | `` Cmd-` `` | Next workspace, wrapping to the first |
-| `Cmd-T` | New Terminal |
+| `Cmd-T`, `Cmd-Shift-;` | New Terminal |
+| `Cmd-Return` | Push: stage, commit, push |
+| `Cmd-B` | Reveal the active file in the Explorer |
+| `Ctrl--` / `Ctrl-=` | Navigate back / forward through opened files |
+| `Cmd-F` / `Cmd-Alt-F` | Find / find-and-replace in the active file |
+| `Cmd-G` / `Cmd-Shift-G` | Next / previous find match |
+| `Cmd-Shift-C` | Insert `path:line` of the active file into the terminal |
 | `Cmd-P` | Quick Open |
 | `Cmd-Shift-P` | Command Palette |
 | `Cmd-Shift-F` | Search All Files |
@@ -601,6 +608,13 @@ Rules:
   claims `escape` for its own query field.
 - Do not reuse a shortcut for a second action.
 - Keep shortcut labels monospaced in the Command Palette.
+- Divergence from the parent app: navigate forward is `Ctrl-=`, not
+  `Ctrl-Shift--`. GPUI folds Shift into the produced character for
+  punctuation keys, so `Ctrl-Shift--` cannot be told apart from `Ctrl--`.
+- Divergence from the parent app: `Option-Z` word wrap is not ported. The
+  editor renders rows through a fixed-height `uniform_list`, so soft wrap
+  needs a different layout and stays out until that changes. `Cmd-F` finds in
+  the editor here; the parent bound it to the terminal.
 
 ## Accessibility Rules
 
@@ -664,6 +678,24 @@ Native checks:
   build inside the workspace must not trigger one.
 - Confirm the process reports no panic in its output.
 
+## Session Persistence
+
+The shell remembers which workspaces are open and which file tabs each one
+holds, in `~/Library/Application Support/Artifex/session.json`.
+
+- Stored: workspace roots in rail order, the active workspace, each
+  workspace's file tabs with their source/preview mode, and the selected tab.
+- Not stored: terminal tabs (a PTY cannot be serialized; each restored
+  workspace opens one fresh terminal), diff tabs (the Git state they showed
+  has moved on), and any editor or scroll state.
+- The file is written on every state change, from `render`, only when the
+  snapshot differs from the last write, atomically via temp file plus rename.
+- Restore degrades silently. A missing or corrupt session file, a deleted
+  root, or a deleted file skips the entry; with nothing left the shell falls
+  back to the launch-argument root.
+- The schema carries a version number. A file with an unknown version is
+  ignored whole, never half-read.
+
 ## Source of Truth
 
 | Area | Source |
@@ -682,6 +714,7 @@ Native checks:
 | Terminal | [src/terminal/mod.rs](src/terminal/mod.rs) |
 | Git | [src/services/git.rs](src/services/git.rs) |
 | Filesystem watching | [src/services/watch.rs](src/services/watch.rs) |
+| Session persistence | [src/services/session.rs](src/services/session.rs) |
 | Parent design contract | `atelier/DESIGN.md` |
 
 Update this document when a shared token, breakpoint, component contract, or

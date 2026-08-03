@@ -92,6 +92,10 @@ pub struct Workspace {
     pub commit_input: Entity<InputState>,
     pub pushing: bool,
     pub scan: ScanState,
+    /// File navigation history. `back` holds files left behind, `forward`
+    /// holds files backed out of; any plain open clears `forward`.
+    back: Vec<PathBuf>,
+    forward: Vec<PathBuf>,
     next_id: usize,
 }
 
@@ -125,6 +129,8 @@ impl Workspace {
             commit_input,
             pushing: false,
             scan: ScanState::default(),
+            back: Vec::new(),
+            forward: Vec::new(),
             next_id: 0,
             root,
             name,
@@ -199,6 +205,41 @@ impl Workspace {
     /// Opens a file. `preview` replaces the current preview tab, matching the
     /// Explorer single-click rule in DESIGN.md.
     pub fn open_file(&mut self, path: PathBuf, preview: bool, cx: &mut App) {
+        if let Some(current) = self.selected_tab().and_then(|tab| tab.file_path())
+            && current != path
+        {
+            self.back.push(current.to_path_buf());
+            self.forward.clear();
+        }
+        self.open_file_unrecorded(path, preview, cx);
+    }
+
+    /// Steps through the file history. `1` is forward, `-1` is back. A file
+    /// deleted since it was recorded is dropped and the step continues.
+    pub fn navigate(&mut self, step: isize, cx: &mut App) {
+        let current = self.selected_tab().and_then(|tab| tab.file_path().map(Path::to_path_buf));
+        loop {
+            let (from, to) = if step < 0 {
+                (&mut self.forward, &mut self.back)
+            } else {
+                (&mut self.back, &mut self.forward)
+            };
+            // `navigate(-1)` pops `back`; the names above are the push side.
+            let Some(path) = to.pop() else {
+                return;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(current) = current.clone() {
+                from.push(current);
+            }
+            self.open_file_unrecorded(path, false, cx);
+            return;
+        }
+    }
+
+    fn open_file_unrecorded(&mut self, path: PathBuf, preview: bool, cx: &mut App) {
         if let Some(index) = self
             .tabs
             .iter()

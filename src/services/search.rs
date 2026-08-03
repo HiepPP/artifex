@@ -151,3 +151,44 @@ fn regex_escape(input: &str) -> String {
     }
     out
 }
+
+/// One in-file match: line index plus the byte range inside that line.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LineMatch {
+    pub row: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Finds every occurrence of `query` per line, case-insensitively.
+///
+/// Drives the editor's find bar, so it works on the line buffer the editor
+/// already holds instead of re-reading the file.
+pub fn find_in_lines(lines: &[String], query: &str) -> Vec<LineMatch> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let needle = query.to_lowercase();
+    let mut matches = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        let haystack = line.to_lowercase();
+        // Lowercasing can change byte lengths (e.g. İ), which would misalign
+        // the ranges against the original line. Fall back to exact match.
+        let (line_ref, needle_ref): (&str, &str) = if haystack.len() == line.len() {
+            (&haystack, &needle)
+        } else {
+            (line.as_str(), query)
+        };
+        let mut from = 0;
+        while let Some(at) = line_ref[from..].find(needle_ref) {
+            let start = from + at;
+            matches.push(LineMatch {
+                row,
+                start,
+                end: start + needle_ref.len(),
+            });
+            from = start + needle_ref.len().max(1);
+        }
+    }
+    matches
+}

@@ -522,3 +522,102 @@ fn terminal_size_never_collapses() {
     assert!(size.columns() >= 2);
     assert!(size.screen_lines() >= 1);
 }
+
+#[test]
+fn session_round_trips_through_disk() {
+    use crate::services::session::{self, FileTabState, SessionState, WorkspaceState};
+    let dir = std::env::temp_dir().join(format!("artifex-session-{}", std::process::id()));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    let state = SessionState::new(
+        1,
+        vec![WorkspaceState {
+            root: "/tmp/a".into(),
+            selected: Some("/tmp/a/README.md".into()),
+            files: vec![FileTabState {
+                path: "/tmp/a/README.md".into(),
+                preview: true,
+            }],
+        }],
+    );
+    session::save_to(&state, &path);
+    let loaded = session::load_from(&path).expect("state loads back");
+    assert!(loaded == state);
+
+    // A second save overwrites in place.
+    let next = SessionState::new(0, Vec::new());
+    session::save_to(&next, &path);
+    assert!(session::load_from(&path).expect("overwrite loads") == next);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn session_load_rejects_missing_corrupt_and_future_files() {
+    use crate::services::session::{self, SessionState};
+    let dir = std::env::temp_dir().join(format!("artifex-session-bad-{}", std::process::id()));
+    let _ = fs::create_dir_all(&dir);
+
+    assert!(session::load_from(&dir.join("absent.json")).is_none());
+
+    let corrupt = dir.join("corrupt.json");
+    fs::write(&corrupt, "{ not json").unwrap();
+    assert!(session::load_from(&corrupt).is_none());
+
+    let future = dir.join("future.json");
+    let mut state = SessionState::new(0, Vec::new());
+    state.version = 99;
+    fs::write(&future, serde_json::to_string(&state).unwrap()).unwrap();
+    assert!(session::load_from(&future).is_none());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn session_window_state_round_trips_and_old_files_get_defaults() {
+    use crate::services::session::{self, SessionState, SidebarTabState};
+    let dir = std::env::temp_dir().join(format!("artifex-session-win-{}", std::process::id()));
+    let _ = fs::create_dir_all(&dir);
+
+    // Full round-trip of the window state fields.
+    let path = dir.join("session.json");
+    let mut state = SessionState::new(0, Vec::new());
+    state.shows_sidebar = false;
+    state.shows_inspector = true;
+    state.sidebar_tab = SidebarTabState::Git;
+    state.zoom = 1.4;
+    state.dark = Some(true);
+    session::save_to(&state, &path);
+    assert!(session::load_from(&path).expect("state loads back") == state);
+
+    // A version 1 file written before the window state fields existed still
+    // loads whole, with defaults.
+    let old = dir.join("old.json");
+    fs::write(&old, r#"{ "version": 1, "active": 0, "workspaces": [] }"#).unwrap();
+    let loaded = session::load_from(&old).expect("old file loads");
+    assert!(loaded.shows_sidebar);
+    assert!(!loaded.shows_inspector);
+    assert!(loaded.sidebar_tab == SidebarTabState::Explorer);
+    assert!(loaded.zoom == 1.0);
+    assert!(loaded.dark.is_none());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn find_in_lines_is_case_insensitive_and_reports_ranges() {
+    use crate::services::search::find_in_lines;
+    let lines: Vec<String> = vec![
+        "let Foo = foo();".into(),
+        "// no hit here".into(),
+        "FOO".into(),
+    ];
+    let hits = find_in_lines(&lines, "foo");
+    assert_eq!(hits.len(), 3);
+    assert_eq!((hits[0].row, hits[0].start, hits[0].end), (0, 4, 7));
+    assert_eq!((hits[1].row, hits[1].start), (0, 10));
+    assert_eq!((hits[2].row, hits[2].start, hits[2].end), (2, 0, 3));
+    assert!(find_in_lines(&lines, "").is_empty());
+    assert!(find_in_lines(&lines, "absent").is_empty());
+}
