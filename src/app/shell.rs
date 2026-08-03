@@ -4,10 +4,11 @@ use std::path::PathBuf;
 
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, KeyBinding,
-    ParentElement, Pixels, Render, SharedString, Styled as _, Window, actions, div,
+    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
+    KeyBinding, ParentElement, Pixels, Render, SharedString, Styled as _, Window, actions, div,
     linear_color_stop, linear_gradient, px,
 };
+use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
@@ -184,6 +185,10 @@ impl Shell {
         }
         workspace.scan.running = true;
         let root = workspace.root.clone();
+        // The rail can be reordered or a workspace closed while the walk runs,
+        // so the result is matched back by root, not by the index it started
+        // from.
+        let scan_root = root.clone();
 
         cx.spawn(async move |shell, cx| {
             let (files, git) = cx
@@ -196,9 +201,16 @@ impl Shell {
                 .await;
             shell
                 .update(cx, |shell, cx| {
+                    let found = shell
+                        .workspaces
+                        .iter()
+                        .position(|workspace| workspace.root == scan_root);
+                    let Some(index) = found else {
+                        return;
+                    };
                     let queued = shell
                         .workspaces
-                        .get_mut(workspace_index)
+                        .get_mut(index)
                         .map(|workspace| {
                             workspace.apply_scan(files, git);
                             workspace.scan.running = false;
@@ -210,7 +222,7 @@ impl Shell {
                         })
                         .unwrap_or((false, false));
                     cx.notify();
-                    shell.scan_workspace(workspace_index, queued.0, queued.1, cx);
+                    shell.scan_workspace(index, queued.0, queued.1, cx);
                 })
                 .ok();
         })
@@ -241,6 +253,48 @@ impl Shell {
         let watched = self.watch.is_some();
         if !watched {
             self.scan_workspace(index, false, true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Moves the workspace at `from` so it ends up at `to` in the final list.
+    ///
+    /// Dropping on a row below inserts after it and dropping on a row above
+    /// inserts before it, which is what plain remove-then-insert gives.
+    fn move_workspace(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.workspaces.len() {
+            return;
+        }
+        let active_root = self
+            .workspaces
+            .get(self.active)
+            .map(|workspace| workspace.root.clone());
+        let workspace = self.workspaces.remove(from);
+        let to = to.min(self.workspaces.len());
+        self.workspaces.insert(to, workspace);
+        if let Some(root) = active_root {
+            if let Some(index) = self
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.root == root)
+            {
+                self.active = index;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Closes one workspace. The last one stays open because the shell always
+    /// renders an active workspace.
+    fn close_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.workspaces.len() <= 1 || index >= self.workspaces.len() {
+            return;
+        }
+        self.workspaces.remove(index);
+        if index < self.active {
+            self.active -= 1;
+        } else if index == self.active {
+            self.active = self.active.min(self.workspaces.len() - 1);
         }
         cx.notify();
     }
@@ -450,6 +504,7 @@ impl Shell {
         let c = cx.tokens().c;
         let active = self.active;
         let total = self.workspaces.len();
+        let shell = cx.entity();
 
         v_flex()
             .w(Metrics::RAIL_WIDTH)
@@ -497,6 +552,9 @@ impl Shell {
                             .map(|(index, workspace)| {
                                 let selected = index == active;
                                 let changed = workspace.git.changed_count();
+                                let name = workspace.name.clone();
+                                let path = workspace.root.to_string_lossy().to_string();
+                                let shell = shell.clone();
                                 v_flex()
                                     .id(("workspace", index))
                                     .cursor_pointer()
@@ -559,6 +617,98 @@ impl Shell {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.select_workspace(index, cx)
                                     }))
+                                    .on_drag(
+                                        DraggedWorkspace { index },
+                                        move |dragged, _, _, cx| {
+                                            let name = name.clone();
+                                            let colors = c;
+                                            let _ = dragged;
+                                            cx.new(|_| WorkspaceDragPreview {
+                                                name,
+                                                c: colors,
+                                            })
+                                        },
+                                    )
+                                    .drag_over::<DraggedWorkspace>(move |style, _, _, _| {
+                                        style.bg(c.rail_hover).border_color(c.accent)
+                                    })
+                                    .on_drop(cx.listener(
+                                        move |this, dragged: &DraggedWorkspace, _, cx| {
+                                            this.move_workspace(dragged.index, index, cx)
+                                        },
+                                    ))
+                                    .context_menu(move |menu, _, _| {
+                                        let path_finder = path.clone();
+                                        let path_copy = path.clone();
+                                        let activate = shell.clone();
+                                        let move_up = shell.clone();
+                                        let move_down = shell.clone();
+                                        let close = shell.clone();
+                                        menu.item(
+                                            PopupMenuItem::new("Activate Workspace")
+                                                .disabled(selected)
+                                                .on_click(move |_, _, cx| {
+                                                    activate.update(cx, |shell, cx| {
+                                                        shell.select_workspace(index, cx)
+                                                    })
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Show in Finder").on_click(
+                                                move |_, _, _| {
+                                                    std::process::Command::new("open")
+                                                        .arg("-R")
+                                                        .arg(&path_finder)
+                                                        .spawn()
+                                                        .ok();
+                                                },
+                                            ),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Copy Project Path").on_click(
+                                                move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            path_copy.clone(),
+                                                        ),
+                                                    );
+                                                },
+                                            ),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new("Move Up")
+                                                .disabled(index == 0)
+                                                .on_click(move |_, _, cx| {
+                                                    move_up.update(cx, |shell, cx| {
+                                                        shell.move_workspace(
+                                                            index,
+                                                            index.saturating_sub(1),
+                                                            cx,
+                                                        )
+                                                    })
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("Move Down")
+                                                .disabled(index + 1 >= total)
+                                                .on_click(move |_, _, cx| {
+                                                    move_down.update(cx, |shell, cx| {
+                                                        shell.move_workspace(index, index + 1, cx)
+                                                    })
+                                                }),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new("Close Workspace")
+                                                .disabled(total <= 1)
+                                                .on_click(move |_, _, cx| {
+                                                    close.update(cx, |shell, cx| {
+                                                        shell.close_workspace(index, cx)
+                                                    })
+                                                }),
+                                        )
+                                    })
                             }),
                     ),
             )
@@ -947,4 +1097,31 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-8", Workspace8, None),
         KeyBinding::new("cmd-9", Workspace9, None),
     ]);
+}
+
+/// Drag payload for reordering the workspace rail.
+#[derive(Clone)]
+struct DraggedWorkspace {
+    index: usize,
+}
+
+/// The floating pill that follows the cursor while a rail row is dragged.
+struct WorkspaceDragPreview {
+    name: String,
+    c: theme::Colors,
+}
+
+impl Render for WorkspaceDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(Space::S)
+            .py(px(4.))
+            .rounded(Radius::ROW)
+            .border_1()
+            .border_color(self.c.rail_border)
+            .bg(self.c.rail_selection)
+            .text_size(Type::BODY)
+            .text_color(self.c.rail_foreground)
+            .child(SharedString::from(self.name.clone()))
+    }
 }
