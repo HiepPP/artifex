@@ -516,8 +516,36 @@ instead of promising a key that cannot arrive.
   Git colour on a raised band, with the trailing context text in secondary
   ink. Separate hunks visually by that band, not by blank lines.
 
-Divergence: no branch picker, no discard, no upstream counts, no image diffs,
-and no commit-message generation.
+- An image change opens side by side instead of a text diff: the HEAD blob
+  (copied to a temp file) on the left, the working tree on the right, each
+  under a monospaced label band. An added or deleted image shows the one
+  surviving side full-view instead, with no "absent" column.
+- On an HTML text diff, the Preview toggle opens the working-tree file
+  rendered in the web preview.
+
+Divergence: no branch picker, no discard, no upstream counts, and no
+commit-message generation.
+
+### File Previews
+
+- An image file (`png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `ico`) opens as
+  a pure preview tab: centred, contained, on the editor surface. There is no
+  Source mode. SVG stays a text file in the editor.
+- An HTML file opens in the editor with a Preview mode that renders the
+  working-tree file in a native webview (`gpui_wry`, the Gate 2 stack).
+  The webview is created lazily on the first Preview render, reloads on
+  save, and is hidden whenever its tab is not the selected Preview tab of
+  the active workspace or an overlay is open - a native child view paints
+  over the GPUI canvas otherwise.
+- A video file (`mp4`, `mov`, `m4v`, `webm`) opens as a player tab: a
+  generated wrapper page in the webview holds a plain `<video>` on a black
+  surface, so hovering shows only the native control bar - never Safari's
+  standalone media document, which dims the whole frame. Same lazy creation
+  and visibility rules as the HTML preview. A video
+  change in the Git panel opens this player for the working-tree file;
+  there is no text diff for it.
+- Markdown keeps its block-tree preview. One Preview toggle (`Cmd-D`) serves
+  all three.
 
 ## Filesystem Freshness
 

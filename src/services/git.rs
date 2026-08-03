@@ -465,3 +465,21 @@ pub fn parse_diff(text: &str, limit: usize) -> Vec<DiffRow> {
     }
     rows
 }
+
+/// Writes the HEAD blob of `path` to a temp file and returns it, for the
+/// side-by-side image diff. `None` when the file is not in HEAD.
+pub fn show_head_copy(root: &Path, path: &str) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["show", &format!("HEAD:{path}")])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let dir = std::env::temp_dir().join("artifex-diff");
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join(format!("HEAD-{}", path.replace('/', "-")));
+    std::fs::write(&file, &output.stdout).ok()?;
+    Some(file)
+}

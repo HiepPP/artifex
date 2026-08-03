@@ -15,7 +15,7 @@ use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::app::chrome::{icon_button, project_menu};
 use crate::app::overlays::OverlayState;
 use crate::app::editor::EditorView;
-use crate::app::workspace::{FileMode, TabKind, Workspace};
+use crate::app::workspace::{FileMode, PreviewKind, TabKind, Workspace, is_html_path};
 use crate::services::git;
 use crate::services::session;
 use crate::services::watch::{RootChange, WatchHub};
@@ -178,7 +178,11 @@ impl Shell {
                             mode, preview_view, ..
                         } = &mut tab.kind
                     {
-                        *mode = if file.preview && preview_view.is_some() {
+                        // An HTML preview restores by mode alone; its webview
+                        // is created lazily on the first Preview render.
+                        *mode = if file.preview
+                            && (preview_view.is_some() || is_html_path(&file.path))
+                        {
                             FileMode::Preview
                         } else {
                             FileMode::Source
@@ -238,6 +242,12 @@ impl Shell {
                             path: path.clone(),
                             preview: matches!(mode, FileMode::Preview),
                         }),
+                        TabKind::Image { path } | TabKind::Video { path, .. } => {
+                            Some(session::FileTabState {
+                                path: path.clone(),
+                                preview: false,
+                            })
+                        }
                         _ => None,
                     })
                     .collect();
@@ -714,9 +724,25 @@ impl Shell {
             return;
         };
         let editor = editor.clone();
+        let web_preview = match &tab.kind {
+            TabKind::File {
+                path,
+                preview_view: Some(PreviewKind::Web(view)),
+                ..
+            } => Some((view.clone(), path.clone())),
+            _ => None,
+        };
         let result = editor.update(cx, |editor, _| editor.save());
         match result {
-            Ok(()) => self.set_status("saved"),
+            Ok(()) => {
+                // A saved HTML file reloads its preview.
+                if let Some((view, path)) = web_preview {
+                    view.update(cx, |view, _| {
+                        view.load_url(&format!("file://{}", path.display()));
+                    });
+                }
+                self.set_status("saved")
+            }
             Err(err) => self.set_status(format!("save failed: {err}")),
         }
         // The watcher sees the write and refreshes off the main thread. Reading
@@ -733,8 +759,124 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // From an HTML text diff, Preview opens the working-tree file
+        // rendered, per DESIGN.md > Git.
+        let html_diff = match self.workspace().selected_tab().map(|tab| &tab.kind) {
+            Some(TabKind::Diff { path, .. }) if is_html_path(Path::new(path)) => {
+                Some(self.workspace().root.join(path))
+            }
+            _ => None,
+        };
+        if let Some(path) = html_diff {
+            if path.is_file() {
+                self.workspace_mut().open_file(path, false, cx);
+                self.workspace_mut().toggle_mode();
+            }
+            cx.notify();
+            return;
+        }
         self.workspace_mut().toggle_mode();
         cx.notify();
+    }
+
+    /// Creates the native webview for the selected HTML tab in Preview mode.
+    ///
+    /// Lazy and render-driven because building one needs the window handle,
+    /// which neither `open_file` nor session restore is given.
+    pub(crate) fn ensure_web_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.workspace().selected;
+        let (path, video) = match self.workspace().tabs.get(selected).map(|tab| &tab.kind) {
+            Some(TabKind::File {
+                path,
+                mode: FileMode::Preview,
+                preview_view: None,
+                ..
+            }) if is_html_path(path) => (path.clone(), false),
+            Some(TabKind::Video { path, view: None }) => (path.clone(), true),
+            _ => return,
+        };
+        let raw = {
+            let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
+                self.set_status("web preview failed: no window handle");
+                return;
+            };
+            match wry::WebViewBuilder::new().build_as_child(&handle) {
+                Ok(raw) => raw,
+                Err(err) => {
+                    self.set_status(format!("web preview failed: {err}"));
+                    return;
+                }
+            }
+        };
+        let url = if video {
+            // A bare video URL gets Safari's standalone media document, which
+            // dims the whole frame behind its hover controls. A wrapper page
+            // with a plain <video> keeps the frame clean; DESIGN.md > File
+            // Previews.
+            match write_video_wrapper(&path) {
+                Some(wrapper) => format!("file://{}", wrapper.display()),
+                None => {
+                    self.set_status("video preview failed: cannot write wrapper page");
+                    return;
+                }
+            }
+        } else {
+            format!("file://{}", path.display())
+        };
+        let view = cx.new(|cx| gpui_wry::WebView::new(raw, window, cx));
+        view.update(cx, |view, _| {
+            view.load_url(&url);
+        });
+        match self
+            .workspace_mut()
+            .tabs
+            .get_mut(selected)
+            .map(|tab| &mut tab.kind)
+        {
+            Some(TabKind::File { preview_view, .. }) if !video => {
+                *preview_view = Some(PreviewKind::Web(view));
+            }
+            Some(TabKind::Video { view: slot, .. }) if video => {
+                *slot = Some(view);
+            }
+            _ => {}
+        }
+    }
+
+    /// A native webview keeps painting over the GPUI canvas unless it is
+    /// hidden explicitly, so every frame reconciles visibility: only the
+    /// selected Preview tab of the active workspace shows, and never under
+    /// an overlay.
+    fn sync_webviews(&mut self, cx: &mut Context<Self>) {
+        let overlay_open = self.overlay.kind.is_some();
+        let mut views = Vec::new();
+        for (workspace_index, workspace) in self.workspaces.iter().enumerate() {
+            for (tab_index, tab) in workspace.tabs.iter().enumerate() {
+                let front = workspace_index == self.active
+                    && tab_index == workspace.selected
+                    && !overlay_open;
+                match &tab.kind {
+                    TabKind::File {
+                        mode,
+                        preview_view: Some(PreviewKind::Web(view)),
+                        ..
+                    } => views.push((view.clone(), front && *mode == FileMode::Preview)),
+                    TabKind::Video {
+                        view: Some(view), ..
+                    } => views.push((view.clone(), front)),
+                    _ => {}
+                }
+            }
+        }
+        for (view, visible) in views {
+            view.update(cx, |view, _| {
+                if visible {
+                    view.show();
+                } else {
+                    view.hide();
+                }
+            });
+        }
     }
 
     fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
@@ -1222,6 +1364,7 @@ impl Focusable for Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.persist_session(cx);
+        self.sync_webviews(cx);
         let c = cx.tokens().c;
         let title_inset = theme::title_bar_inset(window);
         let width = f32::from(window.viewport_size().width) - f32::from(Metrics::RAIL_WIDTH);
@@ -1324,7 +1467,9 @@ impl Render for Shell {
                                                             .size_range(
                                                                 Metrics::CENTER_MIN..px(4000.),
                                                             )
-                                                            .child(self.render_center(cx)),
+                                                            .child(
+                                                                self.render_center(window, cx),
+                                                            ),
                                                     )
                                                     .child(
                                                         resizable_panel()
@@ -1352,6 +1497,60 @@ impl Render for Shell {
 /// fallback would otherwise make the whole filesystem the workspace. A
 /// directory with no parent is the filesystem root, which is never a
 /// workspace; the home directory is what a Finder or Dock launch lands on.
+/// Writes the player page for one video to the temp directory: black
+/// surface, a plain `<video>` with the native control bar and no dimming
+/// media document around it.
+fn write_video_wrapper(video: &Path) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("artifex-video");
+    std::fs::create_dir_all(&dir).ok()?;
+    let name = video.file_name()?.to_string_lossy().replace('/', "-");
+    let page = dir.join(format!("{name}.html"));
+    // Custom controls in a bar BELOW the frame: WebKit's native <video>
+    // controls draw a dimming scrim over the picture on hover, which defeats
+    // screenshotting the frame. Nothing here ever covers the video.
+    let html = format!(
+        r##"<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{{margin:0;height:100%;background:#000;overflow:hidden}}
+body{{display:flex;flex-direction:column}}
+video{{flex:1;min-height:0;width:100%;object-fit:contain;outline:none}}
+#bar{{height:36px;flex:none;display:flex;align-items:center;gap:10px;
+  padding:0 12px;background:#111;color:#ddd;
+  font:12px 'JetBrains Mono',Menlo,monospace;user-select:none}}
+button{{background:none;border:none;color:#ddd;font:inherit;cursor:pointer;padding:2px 6px}}
+button:hover{{color:#fff}}
+#seek{{flex:1;accent-color:#B4552D}}
+</style></head><body>
+<video id="v" src="file://{}" preload="metadata" playsinline></video>
+<div id="bar">
+  <button id="play">&#9654;</button>
+  <span id="time">0:00</span>
+  <input id="seek" type="range" min="0" max="1000" value="0">
+  <span id="dur">0:00</span>
+  <button id="mute">&#128266;</button>
+</div>
+<script>
+const v=document.getElementById('v'),play=document.getElementById('play'),
+seek=document.getElementById('seek'),time=document.getElementById('time'),
+dur=document.getElementById('dur'),mute=document.getElementById('mute');
+const fmt=s=>{{s=Math.floor(s||0);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}};
+const toggle=()=>v.paused?v.play():v.pause();
+play.onclick=toggle;v.onclick=toggle;
+document.onkeydown=e=>{{if(e.key===' '){{e.preventDefault();toggle()}}}};
+v.onplay=()=>play.innerHTML='&#10074;&#10074;';
+v.onpause=()=>play.innerHTML='&#9654;';
+v.onloadedmetadata=()=>dur.textContent=fmt(v.duration);
+v.ontimeupdate=()=>{{time.textContent=fmt(v.currentTime);
+  if(v.duration)seek.value=Math.round(v.currentTime/v.duration*1000)}};
+seek.oninput=()=>{{if(v.duration)v.currentTime=seek.value/1000*v.duration}};
+mute.onclick=()=>{{v.muted=!v.muted;mute.innerHTML=v.muted?'&#128263;':'&#128266;'}};
+</script>
+</body></html>"##,
+        video.display()
+    );
+    std::fs::write(&page, html).ok()?;
+    Some(page)
+}
+
 fn resolve_root() -> PathBuf {
     let explicit = std::env::args().nth(2).map(PathBuf::from);
     let current = std::env::current_dir().ok();

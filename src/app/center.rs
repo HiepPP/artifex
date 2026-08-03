@@ -9,11 +9,16 @@ use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{empty_state, file_icon, icon_button};
 use crate::app::shell::Shell;
-use crate::app::workspace::{FileMode, TabKind};
+use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
 
 impl Shell {
-    pub(crate) fn render_center(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_center(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.ensure_web_preview(window, cx);
         v_flex()
             .size_full()
             .child(self.render_tab_strip(cx))
@@ -26,13 +31,12 @@ impl Shell {
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let selected = self.workspace().selected;
-        let previewable = matches!(
-            self.workspace().selected_tab().map(|tab| &tab.kind),
+        let previewable = match self.workspace().selected_tab().map(|tab| &tab.kind) {
             Some(TabKind::File {
-                preview_view: Some(_),
-                ..
-            })
-        );
+                path, preview_view, ..
+            }) => preview_view.is_some() || is_html_path(path),
+            _ => false,
+        };
         let in_preview = matches!(
             self.workspace().selected_tab().map(|tab| &tab.kind),
             Some(TabKind::File {
@@ -71,7 +75,11 @@ impl Shell {
                             .as_str(),
                         c,
                     ),
-                    TabKind::Diff { .. } => (IconName::Replace, c.git_modified),
+                    TabKind::Image { .. } => (IconName::Frame, c.git_untracked),
+                    TabKind::Video { .. } => (IconName::Eye, c.git_untracked),
+                    TabKind::Diff { .. } | TabKind::ImageDiff { .. } => {
+                        (IconName::Replace, c.git_modified)
+                    }
                 };
                 Strip {
                     index,
@@ -248,11 +256,36 @@ impl Shell {
                 } => {
                     let editor = editor.clone();
                     Some(match (preview_view, mode) {
-                        (Some(preview), FileMode::Preview) => preview.clone().into_any_element(),
+                        (Some(PreviewKind::Markdown(preview)), FileMode::Preview) => {
+                            preview.clone().into_any_element()
+                        }
+                        (Some(PreviewKind::Web(preview)), FileMode::Preview) => {
+                            preview.clone().into_any_element()
+                        }
                         _ => editor.into_any_element(),
                     })
                 }
+                TabKind::Image { path } => Some(image_pane(path.clone(), c).into_any_element()),
+                TabKind::Video { view, .. } => Some(match view {
+                    Some(view) => view.clone().into_any_element(),
+                    // The webview arrives on the next frame, created by
+                    // ensure_web_preview.
+                    None => div().size_full().bg(c.editor).into_any_element(),
+                }),
                 TabKind::Diff { text, .. } => Some(render_diff(text, cx).into_any_element()),
+                TabKind::ImageDiff { old, new, .. } => Some(match (old, new) {
+                    // One-sided change: show the surviving image full, no
+                    // "absent" column.
+                    (None, Some(new)) => image_pane(new.clone(), c).into_any_element(),
+                    (Some(old), None) => image_pane(old.clone(), c).into_any_element(),
+                    _ => h_flex()
+                        .size_full()
+                        .p(Space::M)
+                        .gap(Space::M)
+                        .child(image_diff_side("HEAD", old.clone(), c))
+                        .child(image_diff_side("Working", new.clone(), c))
+                        .into_any_element(),
+                }),
             },
             None => Some(
                 empty_state(
@@ -290,6 +323,76 @@ impl Shell {
                 )
             })
     }
+}
+
+/// One image, centred and contained, on the editor surface.
+fn image_pane(path: std::path::PathBuf, c: crate::theme::Colors) -> impl IntoElement {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p(Space::M)
+        .bg(c.editor)
+        .child(
+            gpui::img(path)
+                .max_w_full()
+                .max_h_full()
+                .object_fit(gpui::ObjectFit::Contain),
+        )
+}
+
+/// One side of the image diff: a label band over the image, or an "absent"
+/// placeholder for an added or deleted side.
+fn image_diff_side(
+    label: &'static str,
+    path: Option<std::path::PathBuf>,
+    c: crate::theme::Colors,
+) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
+        .rounded(Radius::CONTROL)
+        .border_1()
+        .border_color(c.border)
+        .overflow_hidden()
+        .child(
+            div()
+                .w_full()
+                .px(Space::S)
+                .py(px(3.))
+                .bg(c.raised)
+                .text_size(Type::MICRO)
+                .font_family("JetBrains Mono")
+                .text_color(c.ink_secondary)
+                .child(label),
+        )
+        .child(match path {
+            Some(path) => div()
+                .flex_1()
+                .min_h(px(0.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(Space::S)
+                .child(
+                    gpui::img(path)
+                        .max_w_full()
+                        .max_h_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+                .into_any_element(),
+            None => div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(Type::CAPTION)
+                .text_color(c.ink_secondary)
+                .child("absent")
+                .into_any_element(),
+        })
 }
 
 fn render_diff(text: &str, cx: &mut Context<Shell>) -> impl IntoElement {

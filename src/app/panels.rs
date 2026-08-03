@@ -678,6 +678,57 @@ impl Shell {
                     ),
                 ],
             },
+            TabKind::Image { path } => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let relative = path
+                    .strip_prefix(&root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+                let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                Identity {
+                    icon: IconName::Frame,
+                    tint: c.git_untracked,
+                    title: name,
+                    caption: "Image".to_string(),
+                    rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
+                }
+            }
+            TabKind::Video { path, .. } => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let relative = path
+                    .strip_prefix(&root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+                let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                Identity {
+                    icon: IconName::Eye,
+                    tint: c.git_untracked,
+                    title: name,
+                    caption: "Video".to_string(),
+                    rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
+                }
+            }
+            TabKind::ImageDiff { path, old, new } => Identity {
+                icon: IconName::Replace,
+                tint: c.git_modified,
+                title: path.clone(),
+                caption: "Image diff".to_string(),
+                rows: vec![
+                    ("HEAD", if old.is_some() { "present" } else { "absent" }.to_string()),
+                    (
+                        "Working",
+                        if new.is_some() { "present" } else { "absent" }.to_string(),
+                    ),
+                ],
+            },
             TabKind::Diff { path, staged, text } => Identity {
                 icon: IconName::Replace,
                 tint: c.git_modified,

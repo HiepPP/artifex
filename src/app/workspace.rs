@@ -22,21 +22,76 @@ pub enum FileMode {
     Preview,
 }
 
+/// The rendered preview a `File` tab can carry. Markdown parses once per
+/// open; an HTML page loads into a native webview created lazily by the
+/// shell, because building one needs a window handle.
+pub enum PreviewKind {
+    Markdown(Entity<MarkdownView>),
+    Web(Entity<gpui_wry::WebView>),
+}
+
 pub enum TabKind {
     Terminal(Entity<TerminalView>),
     File {
         path: PathBuf,
         editor: Entity<EditorView>,
         mode: FileMode,
-        /// Present only for a file that has a preview mode, so the Markdown
-        /// document is parsed once per open instead of once per frame.
-        preview_view: Option<Entity<MarkdownView>>,
+        preview_view: Option<PreviewKind>,
+    },
+    /// An image opens as a pure preview; there is nothing to edit.
+    Image { path: PathBuf },
+    /// A video plays in a native webview (WKWebView owns the player UI).
+    /// The view is created lazily by the shell, like an HTML preview.
+    Video {
+        path: PathBuf,
+        view: Option<Entity<gpui_wry::WebView>>,
     },
     Diff {
         path: String,
         staged: bool,
         text: String,
     },
+    /// An image change compares HEAD against the working tree side by side.
+    /// `old` is a temp copy of the HEAD blob; a missing side means the file
+    /// was added or deleted.
+    ImageDiff {
+        path: String,
+        old: Option<PathBuf>,
+        new: Option<PathBuf>,
+    },
+}
+
+/// Extensions the image preview accepts. SVG stays out: it is text, and the
+/// editor is the more useful surface for it.
+pub fn is_image_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico")
+    )
+}
+
+/// Extensions the video preview accepts; WKWebView provides the player.
+pub fn is_video_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp4" | "mov" | "m4v" | "webm")
+    )
+}
+
+pub fn is_html_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("html" | "htm")
+    )
 }
 
 pub struct Tab {
@@ -54,7 +109,9 @@ impl Tab {
 
     pub fn file_path(&self) -> Option<&Path> {
         match &self.kind {
-            TabKind::File { path, .. } => Some(path.as_path()),
+            TabKind::File { path, .. }
+            | TabKind::Image { path }
+            | TabKind::Video { path, .. } => Some(path.as_path()),
             _ => None,
         }
     }
@@ -256,26 +313,34 @@ impl Workspace {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
-        let previewable = matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("md") | Some("markdown")
-        );
-        let editor = EditorView::open(path.clone(), cx);
-        let preview_view = previewable.then(|| MarkdownView::open(path.clone(), cx));
         let id = self.next_id();
-        let tab = Tab {
-            id,
-            title,
-            kind: TabKind::File {
+        let kind = if is_image_path(&path) {
+            TabKind::Image { path }
+        } else if is_video_path(&path) {
+            TabKind::Video { path, view: None }
+        } else {
+            let markdown = matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("md") | Some("markdown")
+            );
+            let editor = EditorView::open(path.clone(), cx);
+            let preview_view =
+                markdown.then(|| PreviewKind::Markdown(MarkdownView::open(path.clone(), cx)));
+            TabKind::File {
                 path,
                 editor,
-                mode: if previewable {
+                mode: if markdown {
                     FileMode::Preview
                 } else {
                     FileMode::Source
                 },
                 preview_view,
-            },
+            }
+        };
+        let tab = Tab {
+            id,
+            title,
+            kind,
             preview,
         };
 
@@ -291,6 +356,67 @@ impl Workspace {
     }
 
     pub fn open_diff(&mut self, path: String, staged: bool, untracked: bool) {
+        // DESIGN.md > Git: a video change opens the working-tree player;
+        // there is no meaningful text diff for it.
+        if is_video_path(Path::new(&path)) {
+            let working = self.root.join(&path);
+            if working.is_file() {
+                if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.file_path() == Some(working.as_path()))
+                {
+                    self.selected = index;
+                    return;
+                }
+                let title = Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone());
+                let id = self.next_id();
+                self.tabs.push(Tab {
+                    id,
+                    title,
+                    kind: TabKind::Video {
+                        path: working,
+                        view: None,
+                    },
+                    preview: false,
+                });
+                self.selected = self.tabs.len() - 1;
+                return;
+            }
+        }
+        // DESIGN.md > Git: an image change compares HEAD against the working
+        // tree side by side instead of a text diff.
+        if is_image_path(Path::new(&path)) {
+            let old = (!untracked).then(|| git::show_head_copy(&self.root, &path)).flatten();
+            let working = self.root.join(&path);
+            let new = working.is_file().then_some(working);
+            let title = format!(
+                "{} (diff)",
+                Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone())
+            );
+            if let Some(index) = self.tabs.iter().position(
+                |tab| matches!(&tab.kind, TabKind::ImageDiff { path: p, .. } if p == &path),
+            ) {
+                self.tabs[index].kind = TabKind::ImageDiff { path, old, new };
+                self.selected = index;
+                return;
+            }
+            let id = self.next_id();
+            self.tabs.push(Tab {
+                id,
+                title,
+                kind: TabKind::ImageDiff { path, old, new },
+                preview: false,
+            });
+            self.selected = self.tabs.len() - 1;
+            return;
+        }
         let text = git::diff(&self.root, &path, staged, untracked);
         if let Some(index) = self.tabs.iter().position(|tab| {
             matches!(&tab.kind, TabKind::Diff { path: p, staged: s, .. } if p == &path && *s == staged)
@@ -338,9 +464,15 @@ impl Workspace {
     pub fn toggle_mode(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.selected)
             && let TabKind::File {
-                mode, preview_view, ..
+                path,
+                mode,
+                preview_view,
+                ..
             } = &mut tab.kind
-            && preview_view.is_some()
+            // HTML previews exist before their webview: the shell creates it
+            // lazily on the first Preview render, because building a native
+            // webview needs a window handle.
+            && (preview_view.is_some() || is_html_path(path))
         {
             *mode = match mode {
                 FileMode::Source => FileMode::Preview,
