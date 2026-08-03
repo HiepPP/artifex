@@ -293,51 +293,92 @@ impl Shell {
 }
 
 fn render_diff(text: &str, cx: &mut Context<Shell>) -> impl IntoElement {
+    use crate::services::git::DiffRow;
+
     let c = cx.tokens().c;
-    let lines: Vec<String> = text
-        .lines()
-        .filter(|line| {
-            // DESIGN.md: omit raw git file metadata from the preview.
-            !(line.starts_with("diff --git")
-                || line.starts_with("index ")
-                || line.starts_with("--- ")
-                || line.starts_with("+++ "))
-        })
-        .take(20_000)
-        .map(|l| l.to_string())
-        .collect();
-    let count = lines.len();
+    let rows = crate::services::git::parse_diff(text, 20_000);
+    let count = rows.len();
+
+    // DESIGN.md > Git: two fixed 40-point gutters (old, new), a 16-point sign
+    // column, tinted row backgrounds for additions and deletions, and hunk
+    // headers as raised bands.
+    let gutter = |number: Option<u32>, colors: crate::theme::Colors| {
+        div()
+            .w(px(40.))
+            .flex_none()
+            .pr(Space::XS)
+            .text_right()
+            .text_color(colors.ink_secondary.opacity(0.7))
+            .child(SharedString::from(
+                number.map(|n| n.to_string()).unwrap_or_default(),
+            ))
+    };
 
     uniform_list("diff-rows", count, move |range, _window, cx| {
         let colors = cx.tokens().c;
         range
             .map(|index| {
-                let line = lines.get(index).cloned().unwrap_or_default();
-                let color = if line.starts_with('+') {
-                    colors.git_added
-                } else if line.starts_with('-') {
-                    colors.git_deleted
-                } else if line.starts_with("@@") {
-                    colors.git_untracked
-                } else {
-                    colors.ink
+                let Some(row) = rows.get(index) else {
+                    return div().into_any_element();
                 };
+                if let DiffRow::Hunk { range, context } = row {
+                    return h_flex()
+                        .w_full()
+                        .px(Space::S)
+                        .gap(Space::S)
+                        .bg(colors.raised)
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(colors.git_untracked)
+                                .child(SharedString::from(format!("@@ {range}"))),
+                        )
+                        .when(!context.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_color(colors.ink_secondary)
+                                    .child(SharedString::from(context.clone())),
+                            )
+                        })
+                        .into_any_element();
+                }
+
+                let (old, new, sign, tint, text) = match row {
+                    DiffRow::Add { new, text } => {
+                        (None, Some(*new), "+", Some(colors.git_added), text)
+                    }
+                    DiffRow::Del { old, text } => {
+                        (Some(*old), None, "-", Some(colors.git_deleted), text)
+                    }
+                    DiffRow::Ctx { old, new, text } => {
+                        (Some(*old), Some(*new), "", None, text)
+                    }
+                    // Handled by the early return above.
+                    DiffRow::Hunk { .. } => return div().into_any_element(),
+                };
+
                 h_flex()
                     .w_full()
+                    .when_some(tint, |this, tint| this.bg(tint.opacity(0.10)))
+                    .child(gutter(old, colors))
+                    .child(gutter(new, colors))
                     .child(
                         div()
-                            .w(px(48.))
+                            .w(px(16.))
                             .flex_none()
-                            .pr(Space::S)
-                            .text_right()
-                            .text_color(colors.ink_secondary.opacity(0.7))
-                            .child(SharedString::from((index + 1).to_string())),
+                            .text_center()
+                            .when_some(tint, |this, tint| this.text_color(tint))
+                            .child(SharedString::from(sign)),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .text_color(color)
-                            .child(SharedString::from(line)),
+                            .min_w(px(0.))
+                            .text_color(colors.ink)
+                            .child(SharedString::from(text.clone())),
                     )
                     .into_any_element()
             })

@@ -472,7 +472,33 @@ impl Shell {
                             .child(SharedString::from(changes.len().to_string())),
                     ),
             )
-            .children(changes.iter().map(|change| {
+            .children(git::change_tree(changes).into_iter().map(|row| {
+                // DESIGN.md > Git: changes render as a directory tree. A
+                // directory row carries no status and no action.
+                let indent = px(12. * row.depth as f32);
+                let Some(change) = row.change.and_then(|index| changes.get(index)) else {
+                    return h_flex()
+                        .h(Metrics::ROW)
+                        .w_full()
+                        .items_center()
+                        .pl(Space::M + indent)
+                        .pr(Space::M)
+                        .gap(Space::S)
+                        .child(
+                            Icon::new(IconName::Folder)
+                                .xsmall()
+                                .text_color(c.ink_secondary),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(Type::CAPTION)
+                                .text_color(c.ink_secondary)
+                                .child(SharedString::from(row.label)),
+                        )
+                        .into_any_element();
+                };
                 let path = change.path.clone();
                 let kind = change.kind;
                 let untracked = kind == ChangeKind::Untracked;
@@ -483,10 +509,7 @@ impl Shell {
                     ChangeKind::Conflicted => c.git_deleted,
                     _ => c.git_modified,
                 };
-                let (directory, name) = match path.rsplit_once('/') {
-                    Some((dir, name)) => (format!("{dir}/"), name.to_string()),
-                    None => (String::new(), path.clone()),
-                };
+                let name = row.label;
                 let (icon, tint) = file_icon(&name, c);
                 let group = SharedString::from(format!("change-{title}-{path}"));
                 let open_path = path.clone();
@@ -500,32 +523,18 @@ impl Shell {
                     .h(Metrics::ROW)
                     .w_full()
                     .items_center()
-                    .px(Space::M)
+                    .pl(Space::M + indent)
+                    .pr(Space::M)
                     .gap(Space::S)
                     .hover(|this| this.bg(c.hover))
                     .child(Icon::new(icon).xsmall().text_color(tint))
                     .child(
-                        h_flex()
+                        div()
                             .flex_1()
                             .min_w(px(0.))
-                            .items_baseline()
-                            .gap(px(1.))
-                            .when(!directory.is_empty(), |this| {
-                                this.child(
-                                    div()
-                                        .flex_shrink(1.)
-                                        .truncate()
-                                        .text_size(Type::CAPTION)
-                                        .text_color(c.ink_secondary)
-                                        .child(SharedString::from(directory)),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(Type::BODY)
-                                    .child(SharedString::from(name)),
-                            ),
+                            .truncate()
+                            .text_size(Type::BODY)
+                            .child(SharedString::from(name)),
                     )
                     .child(
                         div()
@@ -592,6 +601,7 @@ impl Shell {
                             .open_diff(open_path.clone(), staged, untracked);
                         cx.notify();
                     }))
+                    .into_any_element()
             }))
     }
 

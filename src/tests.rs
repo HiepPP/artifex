@@ -621,3 +621,74 @@ fn find_in_lines_is_case_insensitive_and_reports_ranges() {
     assert!(find_in_lines(&lines, "").is_empty());
     assert!(find_in_lines(&lines, "absent").is_empty());
 }
+
+#[test]
+fn change_tree_nests_and_compacts_directories() {
+    use crate::services::git::{Change, ChangeKind, change_tree};
+    let change = |path: &str| Change {
+        path: path.into(),
+        kind: ChangeKind::Modified,
+        staged: false,
+    };
+    let changes = vec![
+        change("src/app/shell.rs"),
+        change("src/app/panels.rs"),
+        change("README.md"),
+        change("src/services/git.rs"),
+    ];
+    let rows = change_tree(&changes);
+    let flat: Vec<(usize, &str, bool)> = rows
+        .iter()
+        .map(|r| (r.depth, r.label.as_str(), r.change.is_some()))
+        .collect();
+    // `src` splits into two children so it stays one row; `app` and
+    // `services` have no siblings but hold files, so no further compaction.
+    assert_eq!(
+        flat,
+        vec![
+            (0, "src", false),
+            (1, "app", false),
+            (2, "panels.rs", true),
+            (2, "shell.rs", true),
+            (1, "services", false),
+            (2, "git.rs", true),
+            (0, "README.md", true),
+        ]
+    );
+    // A lone deep file compacts its whole chain into one directory row.
+    let rows = change_tree(&[change("a/b/c/d.rs")]);
+    let flat: Vec<(usize, &str)> = rows.iter().map(|r| (r.depth, r.label.as_str())).collect();
+    assert_eq!(flat, vec![(0, "a/b/c"), (1, "d.rs")]);
+}
+
+#[test]
+fn parse_diff_numbers_lines_and_drops_metadata() {
+    use crate::services::git::{DiffRow, parse_diff};
+    let text = "diff --git a/f.rs b/f.rs\nindex 111..222 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -3,3 +3,4 @@ fn main() {\n ctx one\n-removed\n+added\n+added two\n ctx two\n\\ No newline at end of file";
+    let rows = parse_diff(text, 100);
+    assert_eq!(
+        rows,
+        vec![
+            DiffRow::Hunk {
+                range: "-3,3 +3,4".into(),
+                context: "fn main() {".into()
+            },
+            DiffRow::Ctx { old: 3, new: 3, text: "ctx one".into() },
+            DiffRow::Del { old: 4, text: "removed".into() },
+            DiffRow::Add { new: 4, text: "added".into() },
+            DiffRow::Add { new: 5, text: "added two".into() },
+            DiffRow::Ctx { old: 5, new: 6, text: "ctx two".into() },
+        ]
+    );
+    // Fabricated untracked diff: no header, numbering starts at one.
+    let rows = parse_diff("+first\n+second", 100);
+    assert_eq!(
+        rows,
+        vec![
+            DiffRow::Add { new: 1, text: "first".into() },
+            DiffRow::Add { new: 2, text: "second".into() },
+        ]
+    );
+    // Limit is a hard bound.
+    assert_eq!(parse_diff("+a\n+b\n+c", 2).len(), 2);
+}

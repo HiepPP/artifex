@@ -307,3 +307,161 @@ pub fn repo_root(path: &Path) -> PathBuf {
         .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| path.to_path_buf())
 }
+
+/// One row of the change tree the Git panel renders.
+///
+/// `DESIGN.md` > Git displays each change section as a directory tree with
+/// single-child directory chains compacted into one row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChangeTreeRow {
+    pub depth: usize,
+    /// Directory label (possibly a compacted chain like `src/app`), or the
+    /// file name for a leaf.
+    pub label: String,
+    /// Index into the section's `Vec<Change>` for a file row, `None` for a
+    /// directory row.
+    pub change: Option<usize>,
+}
+
+/// Builds the tree rows for one change section. Directories sort before
+/// files, both alphabetically.
+pub fn change_tree(changes: &[Change]) -> Vec<ChangeTreeRow> {
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct Node {
+        dirs: BTreeMap<String, Node>,
+        files: Vec<(String, usize)>,
+    }
+
+    let mut root = Node::default();
+    for (index, change) in changes.iter().enumerate() {
+        let mut node = &mut root;
+        let mut parts = change.path.split('/').peekable();
+        while let Some(part) = parts.next() {
+            if parts.peek().is_none() {
+                node.files.push((part.to_string(), index));
+            } else {
+                node = node.dirs.entry(part.to_string()).or_default();
+            }
+        }
+    }
+
+    fn walk(node: &Node, depth: usize, rows: &mut Vec<ChangeTreeRow>) {
+        for (name, child) in &node.dirs {
+            // Compact a single-child directory chain into one label.
+            let mut label = name.clone();
+            let mut child = child;
+            while child.files.is_empty() && child.dirs.len() == 1 {
+                let Some((name, next)) = child.dirs.iter().next() else {
+                    break;
+                };
+                label.push('/');
+                label.push_str(name);
+                child = next;
+            }
+            rows.push(ChangeTreeRow {
+                depth,
+                label,
+                change: None,
+            });
+            walk(child, depth + 1, rows);
+        }
+        let mut files = node.files.clone();
+        files.sort();
+        for (name, index) in files {
+            rows.push(ChangeTreeRow {
+                depth,
+                label: name,
+                change: Some(index),
+            });
+        }
+    }
+
+    let mut rows = Vec::new();
+    walk(&root, 0, &mut rows);
+    rows
+}
+
+/// One parsed diff row for the preview. `DESIGN.md` > Git defines what is
+/// kept and what is dropped.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffRow {
+    /// A hunk header: the `@@` range plus the trailing context text.
+    Hunk { range: String, context: String },
+    Add { new: u32, text: String },
+    Del { old: u32, text: String },
+    Ctx { old: u32, new: u32, text: String },
+}
+
+/// Parses `git diff` output into rows carrying real file line numbers,
+/// dropping raw metadata. Bounded at `limit` rows.
+pub fn parse_diff(text: &str, limit: usize) -> Vec<DiffRow> {
+    let mut rows = Vec::new();
+    // Fabricated untracked-file diffs carry no hunk header; numbering starts
+    // at line one.
+    let mut old = 1u32;
+    let mut new = 1u32;
+
+    for line in text.lines() {
+        if rows.len() >= limit {
+            break;
+        }
+        if line.starts_with("diff --git")
+            || line.starts_with("index ")
+            || line.starts_with("--- ")
+            || line.starts_with("+++ ")
+            || line.starts_with("old mode")
+            || line.starts_with("new mode")
+            || line.starts_with("new file mode")
+            || line.starts_with("deleted file mode")
+            || line.starts_with("similarity index")
+            || line.starts_with("rename from")
+            || line.starts_with("rename to")
+            || line.starts_with("\\ No newline")
+        {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@@") {
+            if let Some(end) = rest.find("@@") {
+                let range = rest[..end].trim().to_string();
+                let context = rest[end + 2..].trim().to_string();
+                // `-old_start[,n] +new_start[,n]`
+                for part in range.split_whitespace() {
+                    let (sign, nums) = part.split_at(1);
+                    let start = nums.split(',').next().and_then(|n| n.parse().ok());
+                    match (sign, start) {
+                        ("-", Some(n)) => old = n,
+                        ("+", Some(n)) => new = n,
+                        _ => {}
+                    }
+                }
+                rows.push(DiffRow::Hunk { range, context });
+                continue;
+            }
+        }
+        if let Some(text) = line.strip_prefix('+') {
+            rows.push(DiffRow::Add {
+                new,
+                text: text.to_string(),
+            });
+            new += 1;
+        } else if let Some(text) = line.strip_prefix('-') {
+            rows.push(DiffRow::Del {
+                old,
+                text: text.to_string(),
+            });
+            old += 1;
+        } else {
+            let text = line.strip_prefix(' ').unwrap_or(line);
+            rows.push(DiffRow::Ctx {
+                old,
+                new,
+                text: text.to_string(),
+            });
+            old += 1;
+            new += 1;
+        }
+    }
+    rows
+}

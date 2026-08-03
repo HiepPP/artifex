@@ -493,15 +493,28 @@ instead of promising a key that cannot arrive.
 - Keep each change row at `ROW` height. Show Git status in the trailing slot at
   rest, then overlay the row action in that same slot on hover without reserving
   extra width.
+- Display each change section as a directory tree, not a flat list. Compact a
+  single-child directory chain into one row (`src/app`). Directories sort
+  before files, both alphabetically. Directory rows carry no Git status and no
+  action; they are always expanded, never collapsible. File rows show the file
+  name only - the tree carries the directory.
 - Show recent commits below changes with subject, author, relative time, and
   short hash.
 - Push is one primary control: stage everything, commit the composer subject,
   then push the current branch. Report which stage failed.
 - Open file diffs as center tabs, never inside the sidebar.
-- Omit `diff --git`, `index`, `---`, and `+++` from a diff preview. Keep hunk
-  headers, line numbers, context, additions, and deletions.
+- Omit raw git metadata from a diff preview: `diff --git`, `index`, `---`,
+  `+++`, mode lines, rename/similarity lines, and `\ No newline` markers.
+  Keep hunk headers, line numbers, context, additions, and deletions.
 - Bound a diff preview at 20,000 rendered lines.
-- Keep diff line numbers in a fixed 48-point gutter and the text monospaced.
+- Show real file line numbers in two fixed 40-point gutters (old, new), then a
+  16-point sign column, all monospaced. An added row fills only the new
+  gutter, a deleted row only the old one.
+- Tint the full row background for additions and deletions at low opacity and
+  colour the sign; keep the code text in `ink` so it stays readable.
+- Render a hunk header as its own row: the `@@` range in the accent-adjacent
+  Git colour on a raised band, with the trailing context text in secondary
+  ink. Separate hunks visually by that band, not by blank lines.
 
 Divergence: no branch picker, no discard, no upstream counts, no image diffs,
 and no commit-message generation.
