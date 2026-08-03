@@ -272,17 +272,8 @@ impl Shell {
     }
 
     /// Where the folder picker opens. `~/Projects` is the working habit this
-    /// POC is measured against; the last folder opened wins once there is one,
-    /// and the home directory is the fallback.
+    /// POC is measured against; the home directory is the fallback.
     fn picker_start_directory(&self) -> PathBuf {
-        let last_parent = self
-            .workspaces
-            .last()
-            .and_then(|workspace| workspace.root.parent().map(|p| p.to_path_buf()))
-            .filter(|path| path.is_dir());
-        if let Some(parent) = last_parent {
-            return parent;
-        }
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let projects = home.as_ref().map(|home| home.join("Projects"));
         match (projects, home) {

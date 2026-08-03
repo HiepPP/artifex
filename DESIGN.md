@@ -372,8 +372,8 @@ Geometry rules:
   zero. Count each path once across staged, unstaged, and untracked states.
 - Mark the active workspace with label weight and one selection fill. No
   checkmark, no leading accent bar, no floating card.
-- `Add Workspace` opens the native folder panel. It starts at the parent of the
-  most recently opened workspace, and falls back to `~/Projects`, then home.
+- `Add Workspace` opens the native folder panel. It starts at `~/Projects`,
+  and falls back to home when that folder does not exist.
   Choosing a folder already open selects that workspace instead of adding a
   duplicate.
 
