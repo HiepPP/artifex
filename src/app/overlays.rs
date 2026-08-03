@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use gpui::Focusable as _;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, ParentElement, SharedString, Styled as _,
-    Subscription, Window, div, px,
+    Animation, AnimationExt as _, AnyElement, Context, Entity, IntoElement, ParentElement,
+    SharedString, Styled as _, Subscription, Window, div, ease_out_quint, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Icon, Sizable as _, h_flex, v_flex};
@@ -417,7 +417,7 @@ impl Shell {
                 .when(!wide, |this| this.pt(px(80.)))
                 .when(wide, |this| this.p(Space::L))
                 .child(
-                    v_flex()
+                    (v_flex()
                         .id("overlay-panel")
                         .on_click(|_, _, cx| cx.stop_propagation())
                         .w_full()
@@ -433,6 +433,9 @@ impl Shell {
                         .border_1()
                         .border_color(c.border)
                         .bg(c.raised)
+                        // DESIGN.md: floating surfaces cast the deep warm
+                        // shadow; panels docked to an edge never do.
+                        .shadow(crate::app::chrome::shadow_floating())
                         .child(
                             div()
                                 .h(Metrics::PALETTE_FIELD)
@@ -465,7 +468,18 @@ impl Shell {
                                 .text_size(Type::MICRO)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(footer)),
-                        ),
+                        ))
+                    // Atelier motion: overlays fade in and settle upward over
+                    // one `standard` beat. The element state resets when the
+                    // overlay unmounts, so every open replays the entrance.
+                    .with_animation(
+                        "overlay-in",
+                        Animation::new(std::time::Duration::from_millis(180))
+                            .with_easing(ease_out_quint()),
+                        |panel, delta| {
+                            panel.opacity(delta).mt(px(6. * (1. - delta)))
+                        },
+                    ),
                 )
                 .into_any_element(),
         )

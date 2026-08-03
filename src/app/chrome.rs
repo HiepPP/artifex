@@ -11,21 +11,55 @@ use gpui::{
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
+use gpui::{Background, BoxShadow, linear_color_stop, linear_gradient, point};
+
 use crate::theme::{Colors, Metrics, Radius, Space, Type};
 
-/// The band the window's title bar occupies, drawn by the chrome.
+/// `DESIGN.md` > AtelierChromeBackground: the chrome wash with a faint top
+/// light, shared by the toolbar, the tab strip, panel headers and the status
+/// bar so all four read as one piece of hardware.
+pub fn chrome_gradient(c: Colors) -> Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(c.chrome.blend(gpui::white().opacity(0.10)), 0.),
+        linear_color_stop(c.chrome.blend(gpui::black().opacity(0.04)), 1.),
+    )
+}
+
+/// Atelier's warm soft shadow: rgb(0.18, 0.12, 0.08) never pure black.
+pub fn shadow_soft() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: gpui::hsla(0.07, 0.38, 0.13, 0.12),
+        offset: point(px(0.), px(1.)),
+        blur_radius: px(3.),
+        spread_radius: px(0.),
+        inset: false,
+    }]
+}
+
+/// Atelier's floating-panel shadow: radius 24, y 12, warm dark at 0.22.
+pub fn shadow_floating() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: gpui::hsla(0.06, 0.4, 0.1, 0.22),
+        offset: point(px(0.), px(12.)),
+        blur_radius: px(24.),
+        spread_radius: px(0.),
+        inset: false,
+    }]
+}
+
+/// The empty stretch of a unified toolbar row. It fills the space between
+/// controls and carries the window-drag behaviour there, so buttons keep their
+/// clicks and everything else on the row still moves the window.
 ///
 /// `app_owns_titlebar_drag` stops AppKit from dragging the window and from
 /// waiting to disambiguate a double-click, so both actions are handled here.
 /// `WindowControlArea::Drag` is the portable hint; on macOS the hit-test hook
 /// it feeds is a no-op, which is why the explicit handlers exist.
-/// The strip collapses to zero height in full screen, where there is no title
-/// bar to stand in for.
-pub fn title_bar_drag_strip(inset: Pixels) -> impl IntoElement {
+pub fn toolbar_drag_filler() -> impl IntoElement {
     div()
-        .w_full()
-        .h(inset)
-        .flex_none()
+        .h_full()
+        .flex_1()
         .window_control_area(WindowControlArea::Drag)
         .on_mouse_down(MouseButton::Left, |event, window, _| {
             if event.click_count >= 2 {
@@ -185,15 +219,17 @@ pub fn empty_state(
 /// Colour and glyph for a file, standing in for the Material icon set the
 /// Swift build ships. Identity colour only; Git state stays in its own slot.
 pub fn file_icon(name: &str, c: Colors) -> (IconName, Hsla) {
+    // Source files carry an identity tint; configuration and everything else
+    // stays quiet in `ink_secondary`, so the tree reads as names first and a
+    // few accents second instead of a scatter of colours.
     let extension = name.rsplit('.').next().unwrap_or("");
     match extension {
-        "rs" => (IconName::Settings, c.workflow_todo),
+        "rs" => (IconName::Settings2, c.workflow_todo),
         "swift" => (IconName::Asterisk, c.git_deleted),
         "md" | "markdown" => (IconName::BookOpen, c.git_untracked),
-        "toml" | "yaml" | "yml" | "json" => (IconName::Menu, c.workflow_todo),
         "sh" | "bash" | "zsh" => (IconName::SquareTerminal, c.git_added),
-        "lock" => (IconName::File, c.ink_secondary),
         "html" | "css" => (IconName::Globe, c.git_untracked),
+        "toml" | "yaml" | "yml" | "json" => (IconName::Menu, c.ink_secondary),
         _ => (IconName::File, c.ink_secondary),
     }
 }

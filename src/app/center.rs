@@ -90,7 +90,7 @@ impl Shell {
             .flex_none()
             .items_center()
             .px(Space::XS)
-            .bg(c.chrome)
+            .bg(crate::app::chrome::chrome_gradient(c))
             .border_b_1()
             .border_color(c.border)
             .child(
@@ -120,12 +120,14 @@ impl Shell {
                                     .text_color(c.chrome_selection_ink)
                                     .border_t_1()
                                     .border_color(gpui::white().opacity(0.5))
+                                    .shadow(crate::app::chrome::shadow_soft())
                             })
                             .when(!is_selected, |this| {
                                 this.text_color(c.ink_secondary)
                                     .border_t_1()
                                     .border_color(gpui::transparent_black())
                                     .hover(|this| this.bg(c.hover))
+                                    .active(|this| this.bg(c.pressed))
                             })
                             // The slot exists only on a closable tab, so the
                             // last terminal does not carry an empty gutter.

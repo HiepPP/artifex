@@ -12,7 +12,7 @@ use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{icon_button, project_menu, title_bar_drag_strip};
+use crate::app::chrome::{icon_button, project_menu};
 use crate::app::overlays::OverlayState;
 use crate::app::workspace::Workspace;
 use crate::services::watch::{RootChange, WatchHub};
@@ -510,6 +510,7 @@ impl Shell {
             .w(Metrics::RAIL_WIDTH)
             .flex_none()
             .h_full()
+            .relative()
             .border_r_1()
             .border_color(c.rail_border)
             .bg(linear_gradient(
@@ -517,6 +518,15 @@ impl Shell {
                 linear_color_stop(c.rail_top, 0.),
                 linear_color_stop(c.rail_bottom, 1.),
             ))
+            // Atelier's rail sheen: a faint top light falling into shade, so
+            // the rail reads as one lit panel instead of a flat fill.
+            .child(
+                div().absolute().inset_0().bg(linear_gradient(
+                    180.,
+                    linear_color_stop(gpui::white().opacity(0.06), 0.),
+                    linear_color_stop(gpui::black().opacity(0.08), 1.),
+                )),
+            )
             .child(
                 h_flex()
                     .h(Metrics::PANEL_HEADER)
@@ -564,14 +574,21 @@ impl Shell {
                                     .px(Space::S)
                                     .rounded(Radius::ROW)
                                     .when(selected, |this| {
+                                        // Atelier's glass pill: a top-lit
+                                        // hairline over the fill plus a soft
+                                        // drop, so selection sits above the
+                                        // rail instead of staining it.
                                         this.bg(c.rail_selection)
                                             .border_1()
-                                            .border_color(c.rail_border)
+                                            .border_color(gpui::white().opacity(0.16))
+                                            .shadow(crate::app::chrome::shadow_soft())
                                     })
                                     .when(!selected, |this| {
-                                        this.border_1().border_color(gpui::transparent_black())
+                                        this.border_1()
+                                            .border_color(gpui::transparent_black())
+                                            .hover(|this| this.bg(c.rail_hover))
+                                            .active(|this| this.bg(c.rail_pressed))
                                     })
-                                    .hover(|this| this.bg(c.rail_hover))
                                     .child(
                                         h_flex()
                                             .items_center()
@@ -750,13 +767,15 @@ impl Shell {
         let shows_inspector = self.shows_inspector;
         let dark = self.dark;
 
+        // One unified compact row, like atelier's toolbar: the traffic lights,
+        // the sidebar toggle and the project menu all share a single band.
+        // The empty stretches are drag fillers, so the window still moves.
         v_flex()
             .w_full()
             .flex_none()
-            .bg(c.chrome)
+            .bg(crate::app::chrome::chrome_gradient(c))
             .border_b_1()
             .border_color(c.border)
-            .child(title_bar_drag_strip(title_inset))
             .child(
                 h_flex()
                     .h(Metrics::TAB_BAR)
@@ -764,11 +783,13 @@ impl Shell {
                     .items_center()
                     .px(Space::S)
                     // The traffic lights sit over the leading edge, so the
-                    // first control starts clear of them.
-                    .pl(px(84.))
+                    // first control starts clear of them. Full screen hides
+                    // them and releases the inset.
+                    .when(title_inset > px(0.), |this| this.pl(px(84.)))
                     .child(
                         h_flex()
                             .flex_1()
+                            .h_full()
                             .items_center()
                             .gap(Space::XS)
                             .child(icon_button(
@@ -779,15 +800,18 @@ impl Shell {
                                 cx.listener(|this, _, window, cx| {
                                     this.on_toggle_sidebar(&ToggleSidebar, window, cx)
                                 }),
-                            )),
+                            ))
+                            .child(crate::app::chrome::toolbar_drag_filler()),
                     )
                     .child(project_menu(&name, &path, c))
                     .child(
                         h_flex()
                             .flex_1()
+                            .h_full()
                             .items_center()
                             .justify_end()
                             .gap(Space::XS)
+                            .child(crate::app::chrome::toolbar_drag_filler())
                             .child(icon_button(
                                 "toggle-appearance",
                                 if dark { IconName::Moon } else { IconName::Sun },
@@ -862,7 +886,7 @@ impl Shell {
             .items_center()
             .px(Space::M)
             .gap(Space::M)
-            .bg(c.chrome)
+            .bg(crate::app::chrome::chrome_gradient(c))
             .border_t_1()
             .border_color(c.border)
             .text_size(Type::MICRO)
@@ -1118,8 +1142,9 @@ impl Render for WorkspaceDragPreview {
             .py(px(4.))
             .rounded(Radius::ROW)
             .border_1()
-            .border_color(self.c.rail_border)
+            .border_color(gpui::white().opacity(0.16))
             .bg(self.c.rail_selection)
+            .shadow(crate::app::chrome::shadow_floating())
             .text_size(Type::BODY)
             .text_color(self.c.rail_foreground)
             .child(SharedString::from(self.name.clone()))

@@ -33,7 +33,7 @@ impl Shell {
                     .items_center()
                     .gap(Space::XS)
                     .px(Space::XS)
-                    .bg(c.chrome)
+                    .bg(crate::app::chrome::chrome_gradient(c))
                     .border_b_1()
                     .border_color(c.border)
                     .child(pill_tab(

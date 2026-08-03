@@ -66,7 +66,9 @@ fn main() {
             titlebar: Some(TitlebarOptions {
                 title: Some("Artifex".into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(12.), px(12.))),
+                // Centred against the unified 40-point toolbar row: the
+                // lights are ~12 points tall, so 14 puts their middle at 20.
+                traffic_light_position: Some(point(px(12.), px(14.))),
             }),
             window_min_size: Some(size(px(760.), px(512.))),
             // The chrome draws its own title bar band, so it owns dragging and
