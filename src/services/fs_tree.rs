@@ -19,6 +19,19 @@ pub const HARD_IGNORES: &[&str] = &[
     ".venv",
 ];
 
+/// Direct children of the home directory that macOS gates behind a privacy
+/// prompt. Skipped by the index walk only when the workspace root is the home
+/// directory itself, so a Dock launch does not fire one prompt per folder.
+pub const TCC_PROTECTED: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Pictures",
+    "Music",
+    "Movies",
+    "Library",
+];
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub path: PathBuf,

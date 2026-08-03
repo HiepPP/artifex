@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
-use super::fs_tree::HARD_IGNORES;
+use super::fs_tree::{HARD_IGNORES, TCC_PROTECTED};
 
 /// Files above this size are never indexed or searched.
 pub const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
@@ -25,18 +25,26 @@ pub struct IndexedFile {
 
 pub fn build(root: &Path) -> Vec<IndexedFile> {
     let mut files = Vec::new();
+    let root_is_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|home| std::fs::canonicalize(home).ok())
+        .is_some_and(|home| std::fs::canonicalize(root).ok() == Some(home));
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
         .git_global(true)
         .parents(true)
         .follow_links(false)
-        .filter_entry(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .map(|name| !HARD_IGNORES.contains(&name))
-                .unwrap_or(true)
+        .filter_entry(move |entry| {
+            let Some(name) = entry.file_name().to_str() else {
+                return true;
+            };
+            if HARD_IGNORES.contains(&name) {
+                return false;
+            }
+            // Walking a privacy-gated folder under the home root fires one
+            // macOS permission prompt per folder on a plain Dock launch.
+            !(root_is_home && entry.depth() == 1 && TCC_PROTECTED.contains(&name))
         })
         .build();
 

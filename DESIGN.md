@@ -522,6 +522,11 @@ stay rare enough that an idle workspace costs nothing.
   about a workspace.
 - Drop a path under the hard ignore list or the root `.gitignore` before it
   reaches the debouncer. A build must cost nothing.
+- When the workspace root is the home directory, skip its privacy-gated
+  children (`Desktop`, `Documents`, `Downloads`, `Pictures`, `Music`, `Movies`,
+  `Library`) in the index walk. A Dock launch falls back to the home directory,
+  and walking those folders fires one macOS permission prompt each. They stay
+  reachable through the lazy tree, where descending is an explicit user action.
 - Under `.git`, keep only `HEAD`, `index`, `ORIG_HEAD`, `MERGE_HEAD`, and
   `refs`. Object writes are the bulk of the traffic and no surface reads them.
 - Separate the two refreshes. Only a create, a remove, or a rename can change
