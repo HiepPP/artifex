@@ -428,11 +428,28 @@ of inactive sessions. Every workspace stays fully live for the run.
   reports overlapping captures, so resolve them narrowest-wins into
   non-overlapping runs before painting.
 - `Cmd-S` saves. The status bar reports the result.
+- A click places the caret at the character under the pointer and focuses the
+  editor. Map the point through the frame and monospace advance captured during
+  paint plus the live scroll offset.
+- A drag, or `Shift` with an arrow, extends one selection. `Cmd-A` selects all.
+  Paint the selected columns with the `selection` fill behind the text. Typing,
+  `backspace`, or newline replaces the selection first.
+- `Cmd-C` and `Cmd-X` copy the selection; `Cmd-X` then deletes it. Save and find
+  stay on the shell keymap.
+- Wrap is off by default. A long line then overflows into a horizontal scroll,
+  driven by `uniform_list` under `Unconstrained` horizontal sizing. Rows hug
+  their text so the list measures the widest line.
+- A toolbar button and the `View: Toggle Word Wrap` command flip soft wrap on the
+  selected source file. Wrap on drops virtualisation, because wrapped rows have
+  varying heights that `uniform_list` cannot express, so it renders every row in
+  a plain scrolling column. Wrap is opt-in, so that cost is a reader's choice.
 - The editor implements the GPUI input handler so an input method can compose
   Vietnamese, Japanese, and any other multi-stage text in place.
 
-Divergence: no find bar, no word wrap toggle, no per-file settings, and no
-selection across the document.
+Divergence: no per-file settings and one selection only (no multiple cursors).
+In wrapped mode a click sets the caret's row exactly; its column is exact on the
+first visual line and approximate on a wrapped continuation, and mouse drag
+selection is off (keyboard selection still works).
 
 ### Terminal
 

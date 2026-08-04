@@ -315,9 +315,18 @@ dependencies = [
  "serde_json",
  "smallvec",
  "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-css",
  "tree-sitter-highlight",
+ "tree-sitter-html",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-swift",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
 ]
 
 [[package]]

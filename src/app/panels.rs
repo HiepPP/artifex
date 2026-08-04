@@ -644,14 +644,7 @@ impl Shell {
                     rows: vec![
                         ("Path", relative),
                         ("Bytes", editor.byte_len().to_string()),
-                        (
-                            "Language",
-                            match editor.language() {
-                                crate::services::highlight::Lang::Rust => "Rust".into(),
-                                crate::services::highlight::Lang::Swift => "Swift".into(),
-                                crate::services::highlight::Lang::None => "plain text".into(),
-                            },
-                        ),
+                        ("Language", editor.language().name().to_string()),
                         (
                             "Unsaved",
                             if editor.dirty { "yes" } else { "no" }.to_string(),

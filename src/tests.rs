@@ -247,9 +247,83 @@ fn language_is_resolved_from_the_extension() {
         highlight::Lang::Swift
     );
     assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.py")),
+        highlight::Lang::Python
+    );
+    assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.jsx")),
+        highlight::Lang::JavaScript
+    );
+    assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.ts")),
+        highlight::Lang::TypeScript
+    );
+    assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.tsx")),
+        highlight::Lang::Tsx
+    );
+    assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.json")),
+        highlight::Lang::Json
+    );
+    assert_eq!(
+        highlight::Lang::for_path(Path::new("a/b.toml")),
+        highlight::Lang::Toml
+    );
+    assert_eq!(
         highlight::Lang::for_path(Path::new("a/b.txt")),
         highlight::Lang::None
     );
+}
+
+#[test]
+fn every_grammar_query_compiles_and_colours() {
+    use highlight::{Highlighter, Lang};
+    let colors = Colors::for_test();
+    // A tiny snippet per grammar that must produce at least one coloured span.
+    let cases = [
+        (Lang::Python, "def f(x):\n    return x\n"),
+        (Lang::JavaScript, "const x = 1;\n"),
+        (Lang::TypeScript, "const x: number = 1;\n"),
+        (Lang::Tsx, "const x = <a>hi</a>;\n"),
+        (Lang::Json, "{\"a\": 1}\n"),
+        (Lang::Toml, "a = 1\n"),
+        (Lang::Css, "a { color: red; }\n"),
+        (Lang::Html, "<p>hi</p>\n"),
+        (Lang::Bash, "echo hi\n"),
+        (Lang::Yaml, "a: 1\n"),
+    ];
+    for (lang, source) in cases {
+        let mut highlighter = Highlighter::new(lang);
+        highlighter.parse(source);
+        let starts = highlight::line_starts(source);
+        let spans = highlighter.spans_in(source, 0..source.len(), &starts, &colors);
+        assert!(
+            spans.values().any(|row| !row.is_empty()),
+            "{lang:?} must produce at least one coloured span"
+        );
+    }
+}
+
+#[test]
+fn reparsing_after_an_edit_never_underflows() {
+    use highlight::{Highlighter, Lang};
+    let colors = Colors::for_test();
+    let mut highlighter = Highlighter::new(Lang::Rust);
+
+    // Highlight one version, then an edit that shifts every later byte. Reusing
+    // the stale tree without an edit record made `push_node` subtract with
+    // overflow; a full reparse keeps the tree and `line_starts` in step.
+    let v1 = "fn main() {\n    let x = 1;\n}\n";
+    highlighter.parse(v1);
+    let starts1 = highlight::line_starts(v1);
+    let _ = highlighter.spans_in(v1, 0..v1.len(), &starts1, &colors);
+
+    let v2 = "fn main_renamed() {\n    let x = 1;\n}\n";
+    highlighter.parse(v2);
+    let starts2 = highlight::line_starts(v2);
+    let spans = highlighter.spans_in(v2, 0..v2.len(), &starts2, &colors);
+    assert!(spans.values().any(|row| !row.is_empty()), "the edited buffer still highlights");
 }
 
 #[test]
@@ -757,4 +831,57 @@ fn material_icons_resolve_by_name_extension_and_default() {
     );
     // Every resolved path is an embedded resource the asset source can load.
     assert!(material_icons::MaterialAssets::get("icons/rust.svg").is_some());
+}
+
+#[test]
+fn editor_col_and_byte_convert_across_multibyte_characters() {
+    use crate::app::editor::{byte_to_col, col_to_byte};
+
+    // "tiếng": t(1) i(1) ế(3) n(1) g(1). Byte boundaries: 0,1,2,5,6,7.
+    let line = "tiếng";
+    assert_eq!(col_to_byte(line, 0), 0);
+    assert_eq!(col_to_byte(line, 2), 2, "caret after 'ti' sits before the 3-byte 'ế'");
+    assert_eq!(col_to_byte(line, 3), 5, "caret after 'ế' skips its 3 bytes");
+    assert_eq!(col_to_byte(line, 5), line.len(), "end of line");
+    assert_eq!(col_to_byte(line, 99), line.len(), "past the end clamps to the end");
+
+    assert_eq!(byte_to_col(line, 0), 0);
+    assert_eq!(byte_to_col(line, 2), 2);
+    assert_eq!(byte_to_col(line, 5), 3);
+    assert_eq!(byte_to_col(line, line.len()), 5);
+}
+
+#[test]
+fn editor_x_maps_to_the_nearest_column() {
+    use crate::app::editor::x_to_col;
+    use gpui::px;
+
+    let w = px(10.);
+    assert_eq!(x_to_col(px(0.), w, 8), 0);
+    assert_eq!(x_to_col(px(14.), w, 8), 1, "1.4 rounds down");
+    assert_eq!(x_to_col(px(16.), w, 8), 2, "1.6 rounds up");
+    assert_eq!(x_to_col(px(-5.), w, 8), 0, "left of the text clamps to 0");
+    assert_eq!(x_to_col(px(999.), w, 8), 8, "past the last column clamps to cols");
+    assert_eq!(x_to_col(px(5.), px(0.), 8), 0, "zero width never divides by zero");
+}
+
+#[test]
+fn editor_y_maps_to_the_row_under_the_pointer() {
+    use crate::app::editor::y_to_row;
+    use gpui::px;
+
+    let h = px(20.);
+    assert_eq!(y_to_row(px(0.), h, 5, 100), 5, "top of the first visible row");
+    assert_eq!(y_to_row(px(25.), h, 5, 100), 6, "one row down");
+    assert_eq!(y_to_row(px(-30.), h, 5, 100), 3, "above the first visible row");
+    assert_eq!(y_to_row(px(9999.), h, 5, 100), 100, "past the last row clamps to max");
+    assert_eq!(y_to_row(px(50.), px(0.), 5, 100), 5, "zero height never divides by zero");
+}
+
+#[test]
+fn editor_orders_selection_endpoints_low_to_high() {
+    use crate::app::editor::ordered;
+
+    assert_eq!(ordered((2, 4), (2, 1)), ((2, 1), (2, 4)), "same row orders by byte");
+    assert_eq!(ordered((1, 9), (3, 0)), ((1, 9), (3, 0)), "earlier row wins");
 }

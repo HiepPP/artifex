@@ -8,16 +8,17 @@ use std::path::PathBuf;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Entity, EntityInputHandler, FocusHandle, Focusable, HighlightStyle,
-    IntoElement, KeyDownEvent, ParentElement, Pixels, Render, SharedString, Styled as _,
-    StyledText, UTF16Selection, UniformListScrollHandle, Window, canvas, div, px, uniform_list,
+    App, Bounds, ClipboardItem, Context, Entity, EntityInputHandler, FocusHandle, Focusable,
+    HighlightStyle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Styled as _, StyledText,
+    UTF16Selection, UniformListScrollHandle, Window, canvas, div, px, uniform_list,
 };
 use gpui_component::input::{Input, InputState};
 use gpui_component::{Sizable as _, h_flex, v_flex};
 
-use crate::services::highlight::{Highlighter, Lang, line_starts};
+use crate::services::highlight::{Highlighter, Lang, Span, line_starts};
 use crate::services::search::{LineMatch, find_in_lines};
-use crate::theme::{ActiveTokens as _, Radius, Space, Type};
+use crate::theme::{ActiveTokens as _, Colors, Radius, Space, Type};
 
 const GUTTER_WIDTH: Pixels = px(56.);
 
@@ -31,6 +32,15 @@ pub struct EditorView {
     source: String,
     cursor_row: usize,
     cursor_byte: usize,
+    /// Selection anchor. `Some` while a selection is active or forming; the
+    /// head is always `(cursor_row, cursor_byte)`. `None` is a plain caret.
+    anchor: Option<(usize, usize)>,
+    /// True while a mouse drag is extending the selection.
+    dragging: bool,
+    /// Monospace advance and the editor's frame, captured during paint so a
+    /// click can be mapped back to a `(row, byte)` position.
+    char_w: std::cell::Cell<Pixels>,
+    content: std::cell::Cell<Bounds<Pixels>>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     marked: Option<String>,
@@ -71,6 +81,13 @@ impl EditorView {
             source,
             cursor_row: 0,
             cursor_byte: 0,
+            anchor: None,
+            dragging: false,
+            char_w: std::cell::Cell::new(px(8.)),
+            content: std::cell::Cell::new(Bounds {
+                origin: gpui::point(px(0.), px(0.)),
+                size: gpui::size(px(0.), px(0.)),
+            }),
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             marked: None,
@@ -137,6 +154,7 @@ impl EditorView {
     fn reveal_match(&mut self, hit: LineMatch) {
         self.cursor_row = hit.row.min(self.lines.len().saturating_sub(1));
         self.cursor_byte = hit.start;
+        self.anchor = None;
         self.scroll
             .scroll_to_item(self.cursor_row, gpui::ScrollStrategy::Center);
     }
@@ -206,6 +224,7 @@ impl EditorView {
     pub fn reveal_line(&mut self, line: usize) {
         self.cursor_row = line.min(self.lines.len().saturating_sub(1));
         self.cursor_byte = 0;
+        self.anchor = None;
         self.scroll
             .scroll_to_item(self.cursor_row.saturating_sub(4), gpui::ScrollStrategy::Top);
     }
@@ -224,6 +243,8 @@ impl EditorView {
     }
 
     fn insert(&mut self, text: &str) {
+        // Typing over a selection replaces it.
+        self.delete_selection();
         if text.contains('\n') {
             let mut parts = text.split('\n');
             if let Some(first) = parts.next() {
@@ -247,6 +268,7 @@ impl EditorView {
     }
 
     fn newline(&mut self) {
+        self.delete_selection();
         let line = self.lines[self.cursor_row].clone();
         let at = self.cursor_byte.min(line.len());
         let (head, tail) = line.split_at(at);
@@ -258,6 +280,10 @@ impl EditorView {
     }
 
     fn backspace(&mut self) {
+        // A backspace with a selection deletes the selection, nothing more.
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor_byte > 0 {
             let line = &mut self.lines[self.cursor_row];
             let mut start = self.cursor_byte - 1;
@@ -277,7 +303,16 @@ impl EditorView {
         self.reindex();
     }
 
-    fn move_cursor(&mut self, key: &str) {
+    fn move_cursor(&mut self, key: &str, select: bool) {
+        // Shift extends from the existing anchor, dropping one only when the
+        // move is unshifted.
+        if select {
+            if self.anchor.is_none() {
+                self.anchor = Some((self.cursor_row, self.cursor_byte));
+            }
+        } else {
+            self.anchor = None;
+        }
         match key {
             "left" => {
                 if self.cursor_byte > 0 {
@@ -325,14 +360,38 @@ impl EditorView {
 
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let m = &event.keystroke.modifiers;
+        let key = event.keystroke.key.as_str();
         if m.platform {
+            // The editor owns copy, cut and select-all. Save and find stay on
+            // the shell keymap.
+            match key {
+                "c" => {
+                    if let Some(text) = self.selected_string() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
+                "x" => {
+                    if let Some(text) = self.selected_string() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        self.delete_selection();
+                        cx.notify();
+                    }
+                }
+                "a" => {
+                    self.select_all();
+                    cx.notify();
+                }
+                _ => {}
+            }
             return;
         }
-        match event.keystroke.key.as_str() {
+        match key {
             "backspace" => self.backspace(),
             "enter" => self.newline(),
             "tab" => self.insert("    "),
-            key @ ("left" | "right" | "up" | "down" | "home" | "end") => self.move_cursor(key),
+            k @ ("left" | "right" | "up" | "down" | "home" | "end") => {
+                self.move_cursor(k, m.shift)
+            }
             _ => {
                 // Plain characters arrive through the IME path, not here, so
                 // nothing else is handled: see `replace_text_in_range`.
@@ -340,6 +399,150 @@ impl EditorView {
             }
         }
         cx.notify();
+    }
+
+    /// The ordered selection range, or `None` for a collapsed caret.
+    fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.anchor?;
+        let head = (self.cursor_row, self.cursor_byte);
+        (anchor != head).then(|| ordered(anchor, head))
+    }
+
+    /// The selected text, joining rows with `\n`, or `None` when empty.
+    fn selected_string(&self) -> Option<String> {
+        let ((sr, sb), (er, eb)) = self.selection()?;
+        if sr == er {
+            return self.lines.get(sr).map(|l| l.get(sb..eb).unwrap_or("").to_string());
+        }
+        let mut out = self.lines.get(sr)?.get(sb..).unwrap_or("").to_string();
+        for row in (sr + 1)..er {
+            out.push('\n');
+            if let Some(line) = self.lines.get(row) {
+                out.push_str(line);
+            }
+        }
+        out.push('\n');
+        out.push_str(self.lines.get(er)?.get(..eb).unwrap_or(""));
+        Some(out)
+    }
+
+    /// Removes the selection, collapses the caret to its start, clears the
+    /// anchor. Returns whether anything was deleted.
+    fn delete_selection(&mut self) -> bool {
+        let Some(((sr, sb), (er, eb))) = self.selection() else {
+            return false;
+        };
+        if sr == er {
+            if let Some(line) = self.lines.get_mut(sr)
+                && sb <= line.len()
+                && eb <= line.len()
+            {
+                line.replace_range(sb..eb, "");
+            }
+        } else {
+            let tail = self.lines.get(er).and_then(|l| l.get(eb..)).unwrap_or("").to_string();
+            if let Some(first) = self.lines.get_mut(sr) {
+                let head = first.get(..sb).unwrap_or("").to_string();
+                *first = head + &tail;
+            }
+            let drain_end = (er + 1).min(self.lines.len());
+            self.lines.drain((sr + 1).min(drain_end)..drain_end);
+        }
+        self.cursor_row = sr;
+        self.cursor_byte = sb;
+        self.anchor = None;
+        self.reindex();
+        true
+    }
+
+    /// Selects the whole document, head at the end.
+    fn select_all(&mut self) {
+        let last = self.lines.len().saturating_sub(1);
+        self.anchor = Some((0, 0));
+        self.cursor_row = last;
+        self.cursor_byte = self.lines.get(last).map(|l| l.len()).unwrap_or(0);
+    }
+
+    /// Maps a window-space point to the `(row, byte)` it falls on, using the
+    /// frame and advance captured during paint and the live scroll offset.
+    fn position_at(&self, pos: Point<Pixels>) -> (usize, usize) {
+        let content = self.content.get();
+        let char_w = self.char_w.get();
+        let count = self.lines.len().max(1);
+        let (offset_x, offset_y, item_h) = {
+            let st = self.scroll.0.borrow();
+            // `last_item_size.item` is the viewport, not one row; the row height
+            // is the content height divided across the rows.
+            let item_h = st
+                .last_item_size
+                .map(|s| s.contents.height / count as f32)
+                .filter(|h| *h > px(0.))
+                .unwrap_or(px(f32::from(Type::EDITOR) * 1.4));
+            let offset = st.base_handle.offset();
+            (offset.x, offset.y, item_h)
+        };
+        // The list is inset by Space::S; rows begin below that, text begins
+        // after the gutter. Scroll shifts every row by (offset_x, offset_y),
+        // both negative once scrolled away from the origin.
+        let rel_y = pos.y - content.origin.y - Space::S - offset_y;
+        let max_row = self.lines.len().saturating_sub(1);
+        let row = y_to_row(rel_y, item_h, 0, max_row);
+        let line = self.lines.get(row).map(String::as_str).unwrap_or("");
+        let rel_x = pos.x - content.origin.x - Space::S - GUTTER_WIDTH - offset_x;
+        let col = x_to_col(rel_x, char_w, line.chars().count());
+        (row, col_to_byte(line, col))
+    }
+
+    /// Places the caret from a click inside a wrapped row. The row is known
+    /// from the row's own handler, so only the column is mapped; on a wrapped
+    /// continuation line that column is approximate.
+    fn place_caret_wrapped(&mut self, row: usize, pos: Point<Pixels>) {
+        let content = self.content.get();
+        let char_w = self.char_w.get();
+        let row = row.min(self.lines.len().saturating_sub(1));
+        let line = self.lines.get(row).map(String::as_str).unwrap_or("");
+        let rel_x = pos.x - content.origin.x - Space::S - GUTTER_WIDTH;
+        let col = x_to_col(rel_x, char_w, line.chars().count());
+        self.cursor_row = row;
+        self.cursor_byte = col_to_byte(line, col);
+        self.anchor = None;
+    }
+
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Wrapped rows carry their own click handler; the whole-editor mapping
+        // assumes fixed-height virtualised rows, so it must not run here.
+        if self.wrap {
+            return;
+        }
+        let (row, byte) = self.position_at(event.position);
+        self.cursor_row = row;
+        self.cursor_byte = byte;
+        self.anchor = Some((row, byte));
+        self.dragging = true;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.wrap || !self.dragging {
+            return;
+        }
+        let (row, byte) = self.position_at(event.position);
+        self.cursor_row = row;
+        self.cursor_byte = byte;
+        cx.notify();
+    }
+
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.wrap || !self.dragging {
+            return;
+        }
+        self.dragging = false;
+        // A click that never moved collapses to a caret.
+        if self.anchor == Some((self.cursor_row, self.cursor_byte)) {
+            self.anchor = None;
+            cx.notify();
+        }
     }
 
     /// Renders exactly the rows the uniform list asked for. Highlight queries
@@ -358,47 +561,151 @@ impl EditorView {
             self.highlighter
                 .spans_in(&self.source, start_byte..end_byte, &self.line_starts, &c);
 
-        range
-            .map(|row| {
-                let text = self.lines.get(row).cloned().unwrap_or_default();
-                let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
-                    .get(&row)
-                    .map(|list| {
-                        list.iter()
-                            .filter(|s| s.end <= text.len() && s.start < s.end)
-                            .map(|s| {
-                                (
-                                    s.start..s.end,
-                                    HighlightStyle {
-                                        color: Some(s.color),
-                                        ..Default::default()
-                                    },
-                                )
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+        let char_w = self.char_w.get();
+        let selection = self.selection();
 
-                let highlights = self.overlay_find_matches(row, highlights, text.len(), cx);
-                let is_cursor_row = row == self.cursor_row;
-                h_flex()
-                    .w_full()
-                    .when(is_cursor_row, |this| this.bg(c.selection.opacity(0.35)))
-                    .child(
-                        div()
-                            .w(GUTTER_WIDTH)
-                            .flex_none()
-                            .pr(Space::M)
-                            .text_right()
-                            .text_color(c.ink_secondary.opacity(0.7))
-                            .child(SharedString::from((row + 1).to_string())),
-                    )
-                    .child(div().flex_1().child(
-                        StyledText::new(SharedString::from(text)).with_highlights(highlights),
-                    ))
-                    .into_any_element()
-            })
+        range
+            .map(|row| self.build_row(row, spans.get(&row), char_w, selection, c, false))
             .collect()
+    }
+
+    /// Builds one editor row. `wrap` off gives a natural-width row that never
+    /// wraps, so a long line drives the horizontal scroll; `wrap` on gives a
+    /// full-width row whose text wraps. Selection fill and caret are painted by
+    /// character column, exact off-wrap and on the first visual line when
+    /// wrapped.
+    fn build_row(
+        &self,
+        row: usize,
+        row_spans: Option<&Vec<Span>>,
+        char_w: Pixels,
+        selection: Option<((usize, usize), (usize, usize))>,
+        c: Colors,
+        wrap: bool,
+    ) -> gpui::AnyElement {
+        let text = self.lines.get(row).cloned().unwrap_or_default();
+        let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = row_spans
+            .map(|list| {
+                list.iter()
+                    .filter(|s| s.end <= text.len() && s.start < s.end)
+                    .map(|s| {
+                        (
+                            s.start..s.end,
+                            HighlightStyle {
+                                color: Some(s.color),
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let highlights = self.overlay_find_matches(row, highlights, text.len(), c);
+        let is_cursor_row = row == self.cursor_row;
+        let caret_col = byte_to_col(&text, self.cursor_byte);
+        let line_cols = text.chars().count();
+        // Selected columns on this row: full rows below the first draw one extra
+        // cell to hint that the newline is inside the run.
+        let sel_cols = selection.and_then(|((sr, sb), (er, eb))| {
+            if row < sr || row > er {
+                return None;
+            }
+            let start = if row == sr { byte_to_col(&text, sb) } else { 0 };
+            let end = if row == er { byte_to_col(&text, eb) } else { line_cols + 1 };
+            (end > start).then_some((start, end))
+        });
+
+        // Wrapped: fill the width so the text wraps. Off-wrap: hug the text so a
+        // long line overflows into the horizontal scroll.
+        let mut body = if wrap {
+            div().flex_1().min_w(px(0.)).relative()
+        } else {
+            div().relative().whitespace_nowrap()
+        };
+        if let Some((start, end)) = sel_cols {
+            body = body.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(char_w * start as f32)
+                    .w(char_w * (end - start) as f32)
+                    .bg(c.selection),
+            );
+        }
+        if is_cursor_row {
+            body = body.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(char_w * caret_col as f32)
+                    .w(px(2.))
+                    .bg(c.accent),
+            );
+        }
+
+        h_flex()
+            .when(wrap, |this| this.w_full())
+            .when(is_cursor_row && sel_cols.is_none(), |this| {
+                this.bg(c.selection.opacity(0.35))
+            })
+            .child(
+                div()
+                    .w(GUTTER_WIDTH)
+                    .flex_none()
+                    .pr(Space::M)
+                    .text_right()
+                    .text_color(c.ink_secondary.opacity(0.7))
+                    .child(SharedString::from((row + 1).to_string())),
+            )
+            .child(
+                body.child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
+            )
+            .into_any_element()
+    }
+
+    /// Renders the wrapping column. Not virtualised: wrapping gives rows
+    /// varying heights, which `uniform_list` cannot express, so every row is
+    /// built. Each row carries its own click handler, since the whole-editor
+    /// point mapping assumes fixed-height rows. Wrap is opt-in, so this cost
+    /// only applies to a file the reader chose to wrap.
+    fn render_wrapped(&self, c: Colors, entity: Entity<Self>) -> gpui::AnyElement {
+        let char_w = self.char_w.get();
+        let selection = self.selection();
+        let spans = self.highlighter.spans_in(
+            &self.source,
+            0..self.source.len(),
+            &self.line_starts,
+            &c,
+        );
+
+        let rows = (0..self.lines.len()).map(|row| {
+            let handler = entity.clone();
+            div()
+                .id(("editor-wrap-row", row))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    move |event: &MouseDownEvent, window, cx| {
+                        let pos = event.position;
+                        handler.update(cx, |this, cx| {
+                            this.place_caret_wrapped(row, pos);
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        });
+                    },
+                )
+                .child(self.build_row(row, spans.get(&row), char_w, selection, c, true))
+        });
+
+        div()
+            .id("editor-wrap")
+            .size_full()
+            .overflow_y_scroll()
+            .p(Space::S)
+            .child(v_flex().children(rows))
+            .into_any_element()
     }
 
     /// Lays the find matches over the syntax highlights for one row. Ranges
@@ -409,7 +716,7 @@ impl EditorView {
         row: usize,
         syntax: Vec<(std::ops::Range<usize>, HighlightStyle)>,
         line_len: usize,
-        cx: &App,
+        c: Colors,
     ) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
         let Some(find) = self.find.as_ref() else {
             return syntax;
@@ -425,7 +732,6 @@ impl EditorView {
             return syntax;
         }
 
-        let c = cx.tokens().c;
         let mut merged: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
         for (range, style) in syntax {
             let mut cursor = range.start;
@@ -547,6 +853,22 @@ impl Render for EditorView {
         let count = self.lines.len();
         let focus = self.focus.clone();
         let list_entity = entity.clone();
+        let canvas_entity = entity.clone();
+
+        // Wrap on: a non-virtualised wrapping column. Wrap off: the virtualised
+        // list, now unconstrained horizontally so a long line scrolls sideways.
+        let content = if self.wrap {
+            self.render_wrapped(c, entity.clone())
+        } else {
+            uniform_list("editor-rows", count, move |range, _window, cx| {
+                list_entity.read(cx).render_rows(range, cx)
+            })
+            .track_scroll(&self.scroll)
+            .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
+            .size_full()
+            .p(Space::S)
+            .into_any_element()
+        };
 
         div()
             .track_focus(&self.focus)
@@ -557,13 +879,28 @@ impl Render for EditorView {
             .font_family("JetBrains Mono")
             .text_size(Type::EDITOR)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .child(
                 canvas(
                     |bounds, _, _| bounds,
                     move |_, bounds, window, cx| {
+                        // Capture the frame and the monospace advance so a click
+                        // can be mapped back to a (row, byte) position.
+                        let font = gpui::font("JetBrains Mono");
+                        let font_id = window.text_system().resolve_font(&font);
+                        let cw = window
+                            .text_system()
+                            .ch_advance(font_id, Type::EDITOR)
+                            .unwrap_or(Type::EDITOR * 0.6);
+                        canvas_entity.update(cx, |this, _| {
+                            this.content.set(bounds);
+                            this.char_w.set(cw);
+                        });
                         window.handle_input(
                             &focus,
-                            gpui::ElementInputHandler::new(bounds, entity.clone()),
+                            gpui::ElementInputHandler::new(bounds, canvas_entity.clone()),
                             cx,
                         );
                     },
@@ -571,14 +908,7 @@ impl Render for EditorView {
                 .absolute()
                 .size_full(),
             )
-            .child(
-                uniform_list("editor-rows", count, move |range, _window, cx| {
-                    list_entity.read(cx).render_rows(range, cx)
-                })
-                .track_scroll(&self.scroll)
-                .size_full()
-                .p(Space::S),
-            )
+            .child(content)
             .when_some(self.render_find_bar(cx), |this, bar| this.child(bar))
             .when_some(self.marked.clone(), |this, text| {
                 this.child(
@@ -677,4 +1007,41 @@ impl EntityInputHandler for EditorView {
     ) -> Option<usize> {
         None
     }
+}
+
+// --- Geometry and selection helpers (pure, unit-tested) ------------------
+
+/// Byte offset of the `col`-th character in `line`, clamped to the line end.
+pub(crate) fn col_to_byte(line: &str, col: usize) -> usize {
+    line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len())
+}
+
+/// Character index of byte offset `byte` within `line`.
+pub(crate) fn byte_to_col(line: &str, byte: usize) -> usize {
+    line.char_indices().take_while(|(b, _)| *b < byte).count()
+}
+
+/// Nearest caret column for a horizontal offset `x` into the text. Rounds to
+/// the closest character boundary and clamps to `[0, cols]`.
+pub(crate) fn x_to_col(x: Pixels, char_w: Pixels, cols: usize) -> usize {
+    if char_w <= px(0.) {
+        return 0;
+    }
+    let c = (f32::from(x) / f32::from(char_w)).round();
+    (c.max(0.) as usize).min(cols)
+}
+
+/// Row for a vertical offset `y` measured from the top of `first_row`. Clamps
+/// to `[0, max_row]`.
+pub(crate) fn y_to_row(y: Pixels, row_h: Pixels, first_row: usize, max_row: usize) -> usize {
+    if row_h <= px(0.) {
+        return first_row.min(max_row);
+    }
+    let delta = (f32::from(y) / f32::from(row_h)).floor() as isize;
+    (first_row as isize + delta).clamp(0, max_row as isize) as usize
+}
+
+/// Orders two `(row, byte)` positions low-to-high.
+pub(crate) fn ordered(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    if a <= b { (a, b) } else { (b, a) }
 }

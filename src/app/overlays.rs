@@ -17,6 +17,7 @@ use crate::app::chrome::file_glyph;
 use crate::app::shell::{
     AddWorkspace, CancelOverlay, CommandPalette, NewTerminal, QuickOpen, SaveFile, SearchAllFiles,
     Shell, ToggleAppearance, ToggleInspector, TogglePreview, ToggleSidebar, ToggleSidebarTab,
+    ToggleWrap,
 };
 use crate::services::search::{self, Batch, Cancel};
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
@@ -35,6 +36,7 @@ pub enum Command {
     ToggleInspector,
     ToggleSidebarTab,
     TogglePreview,
+    ToggleWrap,
     ToggleAppearance,
     Save,
     AddWorkspace,
@@ -43,12 +45,13 @@ pub enum Command {
 }
 
 impl Command {
-    const ALL: [Command; 10] = [
+    const ALL: [Command; 11] = [
         Command::NewTerminal,
         Command::ToggleSidebar,
         Command::ToggleInspector,
         Command::ToggleSidebarTab,
         Command::TogglePreview,
+        Command::ToggleWrap,
         Command::ToggleAppearance,
         Command::Save,
         Command::AddWorkspace,
@@ -63,6 +66,7 @@ impl Command {
             Self::ToggleInspector => "View: Toggle Inspector",
             Self::ToggleSidebarTab => "View: Toggle Explorer and Git",
             Self::TogglePreview => "View: Toggle Source and Preview",
+            Self::ToggleWrap => "View: Toggle Word Wrap",
             Self::ToggleAppearance => "View: Toggle Light and Dark",
             Self::Save => "File: Save",
             Self::AddWorkspace => "Workspace: Add Workspace",
@@ -362,6 +366,7 @@ impl Shell {
             Command::ToggleInspector => self.on_toggle_inspector(&ToggleInspector, window, cx),
             Command::ToggleSidebarTab => self.on_toggle_sidebar_tab(&ToggleSidebarTab, window, cx),
             Command::TogglePreview => self.on_toggle_preview(&TogglePreview, window, cx),
+            Command::ToggleWrap => self.on_toggle_wrap(&ToggleWrap, window, cx),
             Command::ToggleAppearance => self.on_toggle_appearance(&ToggleAppearance, window, cx),
             Command::Save => self.on_save(&SaveFile, window, cx),
             Command::AddWorkspace => self.on_add_workspace(&AddWorkspace, window, cx),

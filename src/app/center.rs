@@ -45,6 +45,16 @@ impl Shell {
                 ..
             })
         );
+        // Word-wrap toggle applies to a source editor only. `Some(wrapped)` shows
+        // the button and its active state; `None` hides it.
+        let wrap_state: Option<bool> = match self.workspace().selected_tab().map(|tab| &tab.kind) {
+            Some(TabKind::File {
+                editor,
+                mode: FileMode::Source,
+                ..
+            }) => Some(editor.read(cx).wrap),
+            _ => None,
+        };
 
         struct Strip {
             index: usize,
@@ -196,6 +206,18 @@ impl Shell {
                             c,
                             cx.listener(|this, _, _, cx| {
                                 this.workspace_mut().toggle_mode();
+                                cx.notify();
+                            }),
+                        ))
+                    })
+                    .when_some(wrap_state, |this, wrapped| {
+                        this.child(icon_button(
+                            "toggle-wrap",
+                            IconName::Menu,
+                            wrapped,
+                            c,
+                            cx.listener(|this, _, _, cx| {
+                                this.workspace_mut().toggle_wrap(cx);
                                 cx.notify();
                             }),
                         ))

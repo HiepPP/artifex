@@ -35,6 +35,7 @@ actions!(
         CloseTab,
         SaveFile,
         TogglePreview,
+        ToggleWrap,
         ZoomIn,
         ZoomOut,
         ToggleAppearance,
@@ -779,6 +780,11 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn on_toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
+        self.workspace_mut().toggle_wrap(cx);
+        cx.notify();
+    }
+
     /// Creates the native webview for the selected HTML tab in Preview mode.
     ///
     /// Lazy and render-driven because building one needs the window handle,
@@ -1403,6 +1409,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_find_prev))
             .on_action(cx.listener(Self::on_insert_file_reference))
             .on_action(cx.listener(Self::on_toggle_preview))
+            .on_action(cx.listener(Self::on_toggle_wrap))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_toggle_appearance))

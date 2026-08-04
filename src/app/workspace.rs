@@ -480,4 +480,16 @@ impl Workspace {
             };
         }
     }
+
+    /// Flips soft word wrap on the selected file's editor.
+    pub fn toggle_wrap(&mut self, cx: &mut App) {
+        if let Some(tab) = self.tabs.get(self.selected)
+            && let TabKind::File { editor, .. } = &tab.kind
+        {
+            editor.clone().update(cx, |editor, cx| {
+                editor.wrap = !editor.wrap;
+                cx.notify();
+            });
+        }
+    }
 }

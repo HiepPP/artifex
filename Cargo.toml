@@ -43,10 +43,21 @@ raw-window-handle = { version = "0.6", features = ["std"] }
 alacritty_terminal = "0.26.0"
 
 # --- Syntax highlighting (viewport scoped) ------------------------------
+# Grammar versions are pinned to the ones gpui-component already compiles, so
+# no grammar crate is built twice. See Cargo.lock.
 tree-sitter = "0.26"
 tree-sitter-highlight = "0.26"
 tree-sitter-rust = "0.24"
 tree-sitter-swift = "0.7"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-css = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-bash = "0.23"
+tree-sitter-yaml = "0.7"
 
 # --- Search / fuzzy -----------------------------------------------------
 nucleo-matcher = "0.3"

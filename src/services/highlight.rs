@@ -17,6 +17,16 @@ use crate::theme::Colors;
 pub enum Lang {
     Rust,
     Swift,
+    Python,
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Json,
+    Toml,
+    Css,
+    Html,
+    Bash,
+    Yaml,
     None,
 }
 
@@ -25,7 +35,36 @@ impl Lang {
         match path.extension().and_then(|e| e.to_str()) {
             Some("rs") => Self::Rust,
             Some("swift") => Self::Swift,
+            Some("py" | "pyi" | "pyw") => Self::Python,
+            Some("js" | "jsx" | "mjs" | "cjs") => Self::JavaScript,
+            Some("ts" | "mts" | "cts") => Self::TypeScript,
+            Some("tsx") => Self::Tsx,
+            Some("json" | "jsonc") => Self::Json,
+            Some("toml") => Self::Toml,
+            Some("css") => Self::Css,
+            Some("html" | "htm") => Self::Html,
+            Some("sh" | "bash" | "zsh") => Self::Bash,
+            Some("yaml" | "yml") => Self::Yaml,
             _ => Self::None,
+        }
+    }
+
+    /// Display name for the inspector.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rust => "Rust",
+            Self::Swift => "Swift",
+            Self::Python => "Python",
+            Self::JavaScript => "JavaScript",
+            Self::TypeScript => "TypeScript",
+            Self::Tsx => "TSX",
+            Self::Json => "JSON",
+            Self::Toml => "TOML",
+            Self::Css => "CSS",
+            Self::Html => "HTML",
+            Self::Bash => "Shell",
+            Self::Yaml => "YAML",
+            Self::None => "plain text",
         }
     }
 
@@ -33,15 +72,51 @@ impl Lang {
         match self {
             Self::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
             Self::Swift => Some(tree_sitter_swift::LANGUAGE.into()),
+            Self::Python => Some(tree_sitter_python::LANGUAGE.into()),
+            Self::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+            Self::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+            Self::Tsx => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
+            Self::Json => Some(tree_sitter_json::LANGUAGE.into()),
+            Self::Toml => Some(tree_sitter_toml_ng::LANGUAGE.into()),
+            Self::Css => Some(tree_sitter_css::LANGUAGE.into()),
+            Self::Html => Some(tree_sitter_html::LANGUAGE.into()),
+            Self::Bash => Some(tree_sitter_bash::LANGUAGE.into()),
+            Self::Yaml => Some(tree_sitter_yaml::LANGUAGE.into()),
             Self::None => None,
         }
     }
 
-    fn highlights(self) -> &'static str {
+    /// The highlight query for this grammar. TypeScript and TSX inherit the
+    /// JavaScript grammar, so their queries are stacked on the JS query; the TS
+    /// grammar is a superset, so every JS pattern still matches.
+    fn highlights(self) -> String {
         match self {
-            Self::Rust => tree_sitter_rust::HIGHLIGHTS_QUERY,
-            Self::Swift => tree_sitter_swift::HIGHLIGHTS_QUERY,
-            Self::None => "",
+            Self::Rust => tree_sitter_rust::HIGHLIGHTS_QUERY.to_string(),
+            Self::Swift => tree_sitter_swift::HIGHLIGHTS_QUERY.to_string(),
+            Self::Python => tree_sitter_python::HIGHLIGHTS_QUERY.to_string(),
+            Self::JavaScript => format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+            ),
+            Self::TypeScript => format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY,
+            ),
+            Self::Tsx => format!(
+                "{}\n{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY,
+            ),
+            Self::Json => tree_sitter_json::HIGHLIGHTS_QUERY.to_string(),
+            Self::Toml => tree_sitter_toml_ng::HIGHLIGHTS_QUERY.to_string(),
+            Self::Css => tree_sitter_css::HIGHLIGHTS_QUERY.to_string(),
+            Self::Html => tree_sitter_html::HIGHLIGHTS_QUERY.to_string(),
+            Self::Bash => tree_sitter_bash::HIGHLIGHT_QUERY.to_string(),
+            Self::Yaml => tree_sitter_yaml::HIGHLIGHTS_QUERY.to_string(),
+            Self::None => String::new(),
         }
     }
 }
@@ -66,7 +141,7 @@ impl Highlighter {
         let mut parser = Parser::new();
         let query = lang.language().and_then(|language| {
             parser.set_language(&language).ok()?;
-            Query::new(&language, lang.highlights()).ok()
+            Query::new(&language, &lang.highlights()).ok()
         });
         Self {
             lang,
@@ -81,11 +156,17 @@ impl Highlighter {
     }
 
     /// Parses the whole document. Called on load and on edit, never on scroll.
+    ///
+    /// Reparses from scratch rather than reusing the old tree. Incremental reuse
+    /// is only correct after `Tree::edit` records the change; without it the tree
+    /// reports byte offsets that disagree with the new `line_starts`, and
+    /// `push_node` then underflows. The whole-file parse keeps tree and source in
+    /// step, which is the contract `spans_in` relies on.
     pub fn parse(&mut self, source: &str) {
         if self.query.is_none() {
             return;
         }
-        self.tree = self.parser.parse(source, self.tree.as_ref());
+        self.tree = self.parser.parse(source, None);
     }
 
     /// Highlights only `byte_range`. Returns spans grouped by line index.
@@ -218,7 +299,7 @@ fn push_node(node: &Node, color: Hsla, line_starts: &[usize], out: &mut HashMap<
             continue;
         }
         out.entry(row).or_default().push(Span {
-            start: span_start - line_start,
+            start: span_start.saturating_sub(*line_start),
             end: span_end.saturating_sub(*line_start),
             color,
         });
@@ -247,6 +328,7 @@ fn capture_palette(c: &Colors) -> HashMap<&'static str, Hsla> {
         ("punctuation", c.ink_secondary),
         ("attribute", c.workflow_blocked),
         ("label", c.workflow_blocked),
+        ("tag", c.accent),
     ])
 }
 
