@@ -400,8 +400,10 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Explorer rows are 28 points: chevron, identity icon, label. Treat the whole
   row, including its trailing empty area, as one pointer-cursor hit target.
 - Render Git-ignored entries at reduced opacity, and keep them visible.
-- An Explorer click opens one replaceable preview tab. Opening another file from
-  Explorer replaces that preview in place, so browsing never fills the strip.
+- An Explorer single click opens one replaceable preview tab. Opening another
+  file with a single click replaces that preview in place, so browsing never
+  fills the strip. A double click opens a permanent tab, or promotes the preview
+  of that file to permanent, matching VS Code.
 - Quick Open and Search All Files open permanent tabs. Opening a file that is
   already showing as a preview promotes that tab instead of adding a second one.
 

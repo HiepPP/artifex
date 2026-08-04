@@ -193,13 +193,20 @@ impl Shell {
                                 .when(ignored, |this| this.opacity(0.45))
                                 .on_click({
                                     let entity = entity.clone();
-                                    move |_, _window, cx| {
+                                    move |event: &gpui::ClickEvent, _window, cx| {
                                         entity.update(cx, |shell, cx| {
                                             if is_dir {
                                                 shell.workspace_mut().tree.toggle(&click_path);
                                             } else {
-                                                let path = click_path.clone();
-                                                shell.workspace_mut().open_file(path, true, cx);
+                                                // DESIGN.md > Explorer: single
+                                                // click previews, double click
+                                                // opens a permanent tab.
+                                                let preview = event.click_count() < 2;
+                                                shell.workspace_mut().open_file(
+                                                    click_path.clone(),
+                                                    preview,
+                                                    cx,
+                                                );
                                             }
                                             cx.notify();
                                         });
