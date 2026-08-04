@@ -240,11 +240,32 @@ impl TerminalView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let m = &event.keystroke.modifiers;
+        // Cmd-V is a clipboard action, not a PTY escape: `keys::encode` returns
+        // None for it, so paste has to be handled here before that path.
+        if m.platform && !m.control && !m.alt && event.keystroke.key == "v" {
+            self.paste(cx);
+            return;
+        }
         let mode = self.session.mode();
         if let Some(bytes) = keys::encode(&event.keystroke, mode) {
             self.session.write(bytes);
             cx.notify();
         }
+    }
+
+    /// Writes the clipboard text to the PTY. Honours bracketed paste so a shell
+    /// or editor that enabled it receives the run as inert data, not keystrokes.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        let bracketed = self.session.mode().contains(TermMode::BRACKETED_PASTE);
+        self.session.write(paste_payload(&text, bracketed).into_bytes());
+        cx.notify();
     }
 
     fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -264,6 +285,11 @@ impl TerminalView {
         let offset = content.display_offset as i32;
         let lines = term.screen_lines();
         let mut rows: Vec<Vec<Run>> = (0..lines).map(|_| Vec::new()).collect();
+
+        let cursor = content.cursor;
+        let cursor_row = cursor.point.line.0 + offset;
+        let cursor_pos = (cursor_row >= 0 && (cursor_row as usize) < lines)
+            .then(|| (cursor_row as usize, cursor.point.column.0));
 
         for indexed in content.display_iter {
             let row = (indexed.point.line.0 + offset) as usize;
@@ -286,6 +312,14 @@ impl TerminalView {
             }
             if cell.flags.contains(Flags::HIDDEN) {
                 fg.a = 0.;
+            }
+
+            // Block caret: invert the cell so the glyph stays legible on the
+            // solid cursor fill. The inactive caret is a dim block drawn behind
+            // the text in `render` instead.
+            if self.active && cursor_pos == Some((row, indexed.point.column.0)) {
+                fg = palette.background;
+                bg = palette.cursor;
             }
 
             let painted_bg = (bg != palette.background).then_some(bg);
@@ -313,11 +347,6 @@ impl TerminalView {
                 }),
             }
         }
-
-        let cursor = content.cursor;
-        let cursor_row = cursor.point.line.0 + offset;
-        let cursor_pos = (cursor_row >= 0 && (cursor_row as usize) < lines)
-            .then(|| (cursor_row as usize, cursor.point.column.0));
 
         (rows, cursor_pos)
     }
@@ -374,6 +403,11 @@ impl Render for TerminalView {
                     .size_full()
                     .font_family("JetBrains Mono")
                     .text_size(Type::TERMINAL)
+                    // GPUI text defaults to a golden-ratio line box (~1.62x),
+                    // taller than the grid cell measured at 1.3x. Pin the line
+                    // box to the cell so each row tiles the grid exactly:
+                    // box-drawing runs connect and tall glyphs stop clipping.
+                    .line_height(cell_h)
                     .children(rows.into_iter().enumerate().map(|(row_index, runs)| {
                         let cursor_col = cursor
                             .filter(|(row, _)| *row == row_index)
@@ -381,6 +415,24 @@ impl Render for TerminalView {
                         h_flex()
                             .h(cell_h)
                             .relative()
+                            // Paint the caret first so it sits behind the glyph.
+                            // Appended after the runs it overpaints the character
+                            // under the cursor and hides it.
+                            .when_some(cursor_col.filter(|_| !self.active), |this, col| {
+                                // Inactive caret only: a dim block behind the
+                                // text. The active caret inverts its cell in
+                                // `rows`, so drawing it here too would double it.
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(cell_w * col as f32)
+                                        .top_0()
+                                        .w(cell_w)
+                                        .h(cell_h)
+                                        .bg(palette.cursor)
+                                        .opacity(0.25),
+                                )
+                            })
                             .children(runs.into_iter().map(|run| {
                                 let mut el = div().text_color(run.fg).child(run.text);
                                 if let Some(bg) = run.bg {
@@ -397,18 +449,6 @@ impl Render for TerminalView {
                                 }
                                 el
                             }))
-                            .when_some(cursor_col, |this, col| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .left(cell_w * col as f32)
-                                        .top_0()
-                                        .w(cell_w)
-                                        .h(cell_h)
-                                        .bg(palette.cursor)
-                                        .opacity(if self.active { 0.55 } else { 0.25 }),
-                                )
-                            })
                     }))
                     .when_some(marked, |this, text| {
                         // Composition preview. The PTY sees nothing until the
@@ -554,6 +594,22 @@ impl EntityInputHandler for TerminalView {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         None
+    }
+}
+
+/// Builds the bytes a paste writes to the PTY.
+///
+/// Under bracketed paste the run is wrapped in `\e[200~`..`\e[201~` so the shell
+/// treats it as inert data; any embedded end marker is stripped first so a
+/// crafted clipboard cannot break out and run commands. Without bracketed paste,
+/// newlines collapse to carriage returns, matching what the shell reads from
+/// typed input.
+pub(crate) fn paste_payload(text: &str, bracketed: bool) -> String {
+    if bracketed {
+        let body = text.replace("\x1b[201~", "");
+        format!("\x1b[200~{body}\x1b[201~")
+    } else {
+        text.replace("\r\n", "\r").replace('\n', "\r")
     }
 }
 

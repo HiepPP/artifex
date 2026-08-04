@@ -302,6 +302,34 @@ fn keys_encode_control_sequences_but_never_printable_text() {
 }
 
 #[test]
+fn paste_payload_wraps_and_sanitizes() {
+    use crate::terminal::paste_payload;
+
+    // Plain paste: newlines become carriage returns so each line submits the
+    // way typed input does. CRLF collapses to a single CR, not two.
+    assert_eq!(paste_payload("one\ntwo", false), "one\rtwo");
+    assert_eq!(paste_payload("one\r\ntwo", false), "one\rtwo");
+
+    // Bracketed paste wraps the run so the shell reads it as inert data.
+    assert_eq!(paste_payload("ls -la", true), "\x1b[200~ls -la\x1b[201~");
+
+    // A clipboard carrying the end marker cannot break out and run commands:
+    // the marker is stripped before wrapping.
+    assert_eq!(
+        paste_payload("x\x1b[201~rm -rf /", true),
+        "\x1b[200~xrm -rf /\x1b[201~"
+    );
+
+    // Cmd-V must not also encode to a PTY byte, or paste would double-write.
+    use alacritty_terminal::term::TermMode;
+    use gpui::Keystroke;
+    assert_eq!(
+        keys::encode(&Keystroke::parse("cmd-v").unwrap(), TermMode::empty()),
+        None
+    );
+}
+
+#[test]
 fn git_snapshot_reads_this_repository() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let snapshot = crate::services::git::snapshot(root);

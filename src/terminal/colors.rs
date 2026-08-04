@@ -15,14 +15,17 @@ pub struct TerminalPalette {
     base: [Hsla; 16],
 }
 
+// Ported verbatim from atelier `TerminalPalette.light`/`.dark`. Slots 0..7 are
+// the normal ANSI colors, 8..15 the bright set. Do not substitute the Git
+// status colors here - they are a different, brighter palette.
 const LIGHT_BASE: [u32; 16] = [
-    0x2B2724, 0xA13E37, 0x356B43, 0x8A5B21, 0x39618A, 0x7A4C86, 0x286E68, 0x6A6560, 0x4A4642,
-    0xC25A50, 0x4B8B5B, 0xB07A2C, 0x4E7BAF, 0x9A63A8, 0x349288, 0x302E2B,
+    0x4B4944, 0xB83A32, 0x4F7B55, 0x8A6C24, 0x3C6896, 0x864F78, 0x007A91, 0xC9C5BC, 0x726F68,
+    0xD15345, 0x5F8F66, 0xA07E2D, 0x4E7CB0, 0x9B628E, 0x008DA5, 0xF1EEE7,
 ];
 
 const DARK_BASE: [u32; 16] = [
-    0x3A3F45, 0xE17B70, 0x7FC58C, 0xD4A45D, 0x7FA8D4, 0xC194D0, 0x63C3B8, 0xE8E4DE, 0x5A6069,
-    0xF09B90, 0x9BD9A6, 0xE6BB7A, 0x9CC0E8, 0xD5AEE0, 0x86D8CE, 0xF6F3EE,
+    0x2C312F, 0xD97067, 0x7FBC89, 0xD0A75C, 0x72A8D4, 0xB88AC5, 0x65B9B2, 0xD8DDDA, 0x6E7572,
+    0xEB8A82, 0x98D0A0, 0xE1BD75, 0x8BBBE0, 0xCAA0D4, 0x7ACEC6, 0xF0F3F1,
 ];
 
 impl TerminalPalette {
@@ -35,7 +38,9 @@ impl TerminalPalette {
         Self {
             // Matches the `editor` token in DESIGN.md.
             background: hsla(if dark { 0x191B1E } else { 0xF8F7F4 }),
-            foreground: hsla(if dark { 0xE9E5DF } else { 0x1E1C1A }),
+            // atelier `terminalForeground(usesDarkAppearance:)`.
+            foreground: hsla(if dark { 0xE8E4DE } else { 0x292724 }),
+            // atelier `accent`, reused as the terminal caret.
             cursor: hsla(if dark { 0xD79570 } else { 0xA44F32 }),
             base,
         }

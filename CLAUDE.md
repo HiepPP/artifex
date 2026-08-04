@@ -50,6 +50,28 @@ Optional second argument to the shell mode is the workspace root. Without it,
 `resolve_root` falls back through `current_dir` then `$HOME`, because
 LaunchServices sets the working directory to `/`.
 
+### Relaunch After A Change
+
+After a code change, rebuild and relaunch the app yourself. Do not leave the
+user to open it. A live check is only valid against the new binary.
+
+Quit the running instance first. A live instance keeps its old binary, and its
+window sits above any freshly launched one because both share the bundle id
+`com.artifex.app`. So a new launch stays hidden behind the stale window and any
+check reads stale behavior. `open_application`, osascript raise, and launching
+while another app is frontmost all fail to reorder across the two.
+
+```bash
+./scripts/build.sh                    # rebuild the bundle
+osascript -e 'quit app "Artifex"'     # close the stale instance (pkill -x artifex if that fails)
+open dist/Artifex.app                 # launch and activate the fresh one
+```
+
+`open dist/Artifex.app` starts the shell at the fallback root. For a specific
+workspace root or a gate, launch the binary directly instead (see Running). The
+graceful quit lets session persistence save open workspaces and tabs; the fresh
+instance restores them.
+
 ### Measurement
 
 ```bash
