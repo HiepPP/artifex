@@ -316,7 +316,7 @@ the sidebar header, the tab strip, and the status bar.
 | `count_badge` | Monospaced count on a 14% wash of its own semantic tint |
 | `pill_tab` | Header tab: icon, label, optional count. Equal share of the header, `ROW` height, glass fill and top-lit hairline when selected |
 | `empty_state` | One icon well, a serif title, and a short message |
-| `file_icon` | Identity color and glyph per extension. Never tinted by Git state |
+| `file_glyph` / `folder_glyph` | Full-colour Material icon per name and extension, resolved from the ported theme. Never tinted by Git state |
 | `project_menu` | 420-point project trigger, text only, middle-truncated |
 
 Rules:
@@ -324,9 +324,12 @@ Rules:
 - Do not add a component for one local use.
 - A component owns its own states. A caller must not re-implement hover or
   selection for it.
-- Icons come from the gpui-component icon set. Atelier's Material icon theme is
-  not ported; `file_icon` stands in for it and keeps the same rule that identity
-  color never carries Git meaning.
+- Chrome icons come from the gpui-component icon set. File and folder glyphs
+  come from Atelier's ported Material icon theme: a JSON manifest plus SVGs,
+  embedded through `rust-embed` and resolved by `services/material_icons.rs`.
+  GPUI's `img` element rasterises the SVG in full colour. The `Glyph` type
+  carries either a tinted component icon or a Material resource path, and the
+  identity glyph never carries Git meaning.
 
 ### Interaction States
 

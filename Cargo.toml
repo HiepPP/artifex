@@ -72,6 +72,8 @@ anyhow = "1"
 async-channel = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Bundles the ported Material file-icon theme (manifest + SVGs) into the binary.
+rust-embed = { version = "8.7.2", features = ["interpolate-folder-path"] }
 smallvec = "1"
 parking_lot = "0.12"
 notify = "8"

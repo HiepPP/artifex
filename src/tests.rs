@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use crate::services::{file_index, fs_tree, highlight, search, watch};
+use crate::services::{file_index, fs_tree, highlight, material_icons, search, watch};
 use crate::terminal::keys;
 use crate::theme::{Colors, LayoutMode};
 
@@ -691,4 +691,42 @@ fn parse_diff_numbers_lines_and_drops_metadata() {
     );
     // Limit is a hard bound.
     assert_eq!(parse_diff("+a\n+b\n+c", 2).len(), 2);
+}
+
+#[test]
+fn material_icons_resolve_by_name_extension_and_default() {
+    // Extension maps to the themed glyph, as an embedded resource path.
+    let rust = material_icons::file_icon("main.rs", false);
+    assert_eq!(rust, "material-icons/icons/rust.svg");
+    // A plain extension maps to its glyph.
+    assert_eq!(
+        material_icons::file_icon("notes.md", false),
+        "material-icons/icons/markdown.svg"
+    );
+    // An exact file name wins over the extension: README carries its own glyph.
+    assert_eq!(
+        material_icons::file_icon("README.md", false),
+        "material-icons/icons/readme.svg"
+    );
+    // An unknown extension drops to the default file glyph.
+    assert_eq!(
+        material_icons::file_icon("mystery.zzzzz", false),
+        "material-icons/icons/file.svg"
+    );
+    // Folders split on open state; an unknown name uses the appearance default.
+    assert_eq!(
+        material_icons::folder_icon("no-such-folder", false, false),
+        "material-icons/icons/folder.svg"
+    );
+    assert_eq!(
+        material_icons::folder_icon("no-such-folder", true, false),
+        "material-icons/icons/folder-open.svg"
+    );
+    // A named folder resolves to its own themed glyph, not the default.
+    assert_ne!(
+        material_icons::folder_icon("src", false, false),
+        "material-icons/icons/folder.svg"
+    );
+    // Every resolved path is an embedded resource the asset source can load.
+    assert!(material_icons::MaterialAssets::get("icons/rust.svg").is_some());
 }

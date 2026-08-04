@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{empty_state, file_icon, icon_button};
+use crate::app::chrome::{Glyph, empty_state, file_glyph, icon_button};
 use crate::app::shell::Shell;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
@@ -30,6 +30,7 @@ impl Shell {
     /// the selected or hovered tab.
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let light = !cx.tokens().dark;
         let selected = self.workspace().selected;
         let previewable = match self.workspace().selected_tab().map(|tab| &tab.kind) {
             Some(TabKind::File {
@@ -49,8 +50,7 @@ impl Shell {
             index: usize,
             title: String,
             preview: bool,
-            icon: IconName,
-            tint: gpui::Hsla,
+            glyph: Glyph,
             closable: bool,
         }
 
@@ -66,27 +66,26 @@ impl Shell {
             .iter()
             .enumerate()
             .map(|(index, tab)| {
-                let (icon, tint) = match &tab.kind {
-                    TabKind::Terminal(_) => (IconName::SquareTerminal, c.ink_secondary),
-                    TabKind::File { path, .. } => file_icon(
-                        path.file_name()
+                let glyph = match &tab.kind {
+                    TabKind::Terminal(_) => Glyph::Mono(IconName::SquareTerminal, c.ink_secondary),
+                    TabKind::File { path, .. } => file_glyph(
+                        &path
+                            .file_name()
                             .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default()
-                            .as_str(),
-                        c,
+                            .unwrap_or_default(),
+                        light,
                     ),
-                    TabKind::Image { .. } => (IconName::Frame, c.git_untracked),
-                    TabKind::Video { .. } => (IconName::Eye, c.git_untracked),
+                    TabKind::Image { .. } => Glyph::Mono(IconName::Frame, c.git_untracked),
+                    TabKind::Video { .. } => Glyph::Mono(IconName::Eye, c.git_untracked),
                     TabKind::Diff { .. } | TabKind::ImageDiff { .. } => {
-                        (IconName::Replace, c.git_modified)
+                        Glyph::Mono(IconName::Replace, c.git_modified)
                     }
                 };
                 Strip {
                     index,
                     title: tab.title.clone(),
                     preview: tab.preview,
-                    icon,
-                    tint,
+                    glyph,
                     closable: !tab.is_terminal() || terminals > 1,
                 }
             })
@@ -162,7 +161,7 @@ impl Shell {
                                         })),
                                 )
                             })
-                            .child(Icon::new(tab.icon).xsmall().text_color(tab.tint))
+                            .child(tab.glyph.render(false))
                             .child(
                                 div()
                                     .flex_1()

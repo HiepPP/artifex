@@ -6,13 +6,14 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, ElementId, Hsla, IntoElement, MouseButton, Pixels, SharedString, Styled as _,
-    Window, WindowControlArea, div, px,
+    AnyElement, App, ClickEvent, ElementId, Hsla, IntoElement, MouseButton, SharedString, Window,
+    WindowControlArea, div, img, px,
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use gpui::{Background, BoxShadow, linear_color_stop, linear_gradient, point};
 
+use crate::services::material_icons;
 use crate::theme::{Colors, Metrics, Radius, Space, Type};
 
 /// `DESIGN.md` > AtelierChromeBackground: the chrome wash with a faint top
@@ -216,22 +217,45 @@ pub fn empty_state(
         )
 }
 
-/// Colour and glyph for a file, standing in for the Material icon set the
-/// Swift build ships. Identity colour only; Git state stays in its own slot.
-pub fn file_icon(name: &str, c: Colors) -> (IconName, Hsla) {
-    // Source files carry an identity tint; configuration and everything else
-    // stays quiet in `ink_secondary`, so the tree reads as names first and a
-    // few accents second instead of a scatter of colours.
-    let extension = name.rsplit('.').next().unwrap_or("");
-    match extension {
-        "rs" => (IconName::Settings2, c.workflow_todo),
-        "swift" => (IconName::Asterisk, c.git_deleted),
-        "md" | "markdown" => (IconName::BookOpen, c.git_untracked),
-        "sh" | "bash" | "zsh" => (IconName::SquareTerminal, c.git_added),
-        "html" | "css" => (IconName::Globe, c.git_untracked),
-        "toml" | "yaml" | "yml" | "json" => (IconName::Menu, c.ink_secondary),
-        _ => (IconName::File, c.ink_secondary),
+/// A file or folder glyph. Either a tinted monochrome icon from the
+/// gpui-component set, or a full-colour Material SVG resolved from the ported
+/// theme. Identity only; Git state stays in its own slot.
+#[derive(Clone)]
+pub enum Glyph {
+    /// A gpui-component icon, tinted. Used for terminals, diffs, and previews
+    /// the Material theme has no file to match.
+    Mono(IconName, Hsla),
+    /// A ported Material icon, resolved to an embedded SVG resource path.
+    Material(SharedString),
+}
+
+impl Glyph {
+    /// Renders the glyph at one of the two sizes the surfaces use: the `xsmall`
+    /// tree/tab/quick glyph, or the `small` inspector-header glyph.
+    pub fn render(self, small: bool) -> AnyElement {
+        match self {
+            Glyph::Mono(icon, tint) => {
+                let icon = Icon::new(icon).text_color(tint);
+                let icon = if small { icon.small() } else { icon.xsmall() };
+                icon.into_any_element()
+            }
+            Glyph::Material(path) => {
+                let side = if small { px(16.) } else { px(14.) };
+                img(path).size(side).flex_none().into_any_element()
+            }
+        }
     }
+}
+
+/// The colour glyph for a file, resolved from the ported Material icon theme by
+/// name and extension.
+pub fn file_glyph(name: &str, light: bool) -> Glyph {
+    Glyph::Material(material_icons::file_icon(name, light))
+}
+
+/// The colour glyph for a folder, split by open state.
+pub fn folder_glyph(name: &str, expanded: bool, light: bool) -> Glyph {
+    Glyph::Material(material_icons::folder_icon(name, expanded, light))
 }
 
 /// The project command trigger. `DESIGN.md` gives it a 420-point command-centre

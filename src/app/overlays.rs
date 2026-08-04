@@ -9,11 +9,11 @@ use gpui::{
     SharedString, Styled as _, Subscription, Window, div, ease_out_quint, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher};
 
-use crate::app::chrome::file_icon;
+use crate::app::chrome::file_glyph;
 use crate::app::shell::{
     AddWorkspace, CancelOverlay, CommandPalette, NewTerminal, QuickOpen, SaveFile, SearchAllFiles,
     Shell, ToggleAppearance, ToggleInspector, TogglePreview, ToggleSidebar, ToggleSidebarTab,
@@ -500,6 +500,7 @@ impl Shell {
 
     fn render_quick_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let light = !cx.tokens().dark;
         let selected = self.overlay.selected;
         let rows: Vec<(usize, String, String)> = self
             .overlay
@@ -516,7 +517,7 @@ impl Shell {
             .collect();
 
         v_flex().children(rows.into_iter().map(|(index, name, relative)| {
-            let (icon, tint) = file_icon(&name, c);
+            let glyph = file_glyph(&name, light);
             h_flex()
                 .id(("quick", index))
                 .cursor_pointer()
@@ -526,7 +527,7 @@ impl Shell {
                 .py(Space::XS)
                 .when(index == selected, |this| this.bg(c.selection))
                 .hover(|this| this.bg(c.hover))
-                .child(Icon::new(icon).xsmall().text_color(tint))
+                .child(glyph.render(false))
                 .child(
                     v_flex()
                         .flex_1()

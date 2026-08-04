@@ -7,7 +7,7 @@ use gpui::{
 use gpui_component::input::Input;
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{file_icon, icon_button, pill_tab};
+use crate::app::chrome::{Glyph, file_glyph, folder_glyph, icon_button, pill_tab};
 use crate::app::shell::{Shell, SidebarTab};
 use crate::services::git::{self, ChangeKind};
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
@@ -124,6 +124,7 @@ impl Shell {
                 uniform_list("explorer-rows", count, move |range, _window, cx| {
                     let shell = entity.read(cx);
                     let colors = cx.tokens().c;
+                    let light = !cx.tokens().dark;
                     let workspace = shell.workspace();
                     range
                         .map(|index| {
@@ -136,17 +137,10 @@ impl Shell {
                             let indent = px(8. + row.depth as f32 * 12.);
                             let is_selected = selected.as_deref() == Some(path.as_path());
                             let ignored = workspace.is_ignored(&path);
-                            let (icon, tint) = if is_dir {
-                                (
-                                    if expanded {
-                                        IconName::FolderOpen
-                                    } else {
-                                        IconName::Folder
-                                    },
-                                    colors.ink_secondary,
-                                )
+                            let glyph = if is_dir {
+                                folder_glyph(&row.entry.name, expanded, light)
                             } else {
-                                file_icon(&row.entry.name, colors)
+                                file_glyph(&row.entry.name, light)
                             };
                             let click_path = path.clone();
                             h_flex()
@@ -185,7 +179,7 @@ impl Shell {
                                         .flex_none()
                                         .flex()
                                         .items_center()
-                                        .child(Icon::new(icon).xsmall().text_color(tint)),
+                                        .child(glyph.render(false)),
                                 )
                                 .child(
                                     div()
@@ -448,6 +442,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = cx.tokens().c;
+        let light = !cx.tokens().dark;
         let root = self.workspace().root.clone();
 
         v_flex()
@@ -510,7 +505,7 @@ impl Shell {
                     _ => c.git_modified,
                 };
                 let name = row.label;
-                let (icon, tint) = file_icon(&name, c);
+                let glyph = file_glyph(&name, light);
                 let group = SharedString::from(format!("change-{title}-{path}"));
                 let open_path = path.clone();
                 let action_path = path.clone();
@@ -527,7 +522,7 @@ impl Shell {
                     .pr(Space::M)
                     .gap(Space::S)
                     .hover(|this| this.bg(c.hover))
-                    .child(Icon::new(icon).xsmall().text_color(tint))
+                    .child(glyph.render(false))
                     .child(
                         div()
                             .flex_1()
@@ -612,12 +607,12 @@ impl Shell {
         use crate::app::workspace::TabKind;
 
         let c = cx.tokens().c;
+        let light = !cx.tokens().dark;
         let workspace = self.workspace();
         let root = workspace.root.clone();
 
         struct Identity {
-            icon: IconName,
-            tint: gpui::Hsla,
+            glyph: Glyph,
             title: String,
             caption: String,
             rows: Vec<(&'static str, String)>,
@@ -630,15 +625,13 @@ impl Shell {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let (icon, tint) = file_icon(&name, c);
                 let relative = path
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
                     .to_string();
                 Identity {
-                    icon,
-                    tint,
+                    glyph: file_glyph(&name, light),
                     caption: format!("File - {} lines", editor.line_count()),
                     title: name,
                     rows: vec![
@@ -660,8 +653,7 @@ impl Shell {
                 }
             }
             TabKind::Terminal(view) => Identity {
-                icon: IconName::SquareTerminal,
-                tint: c.ink_secondary,
+                glyph: Glyph::Mono(IconName::SquareTerminal, c.ink_secondary),
                 title: view.read(cx).session.title.to_string(),
                 caption: "Terminal".to_string(),
                 rows: vec![
@@ -690,8 +682,7 @@ impl Shell {
                     .to_string();
                 let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 Identity {
-                    icon: IconName::Frame,
-                    tint: c.git_untracked,
+                    glyph: Glyph::Mono(IconName::Frame, c.git_untracked),
                     title: name,
                     caption: "Image".to_string(),
                     rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
@@ -709,16 +700,14 @@ impl Shell {
                     .to_string();
                 let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 Identity {
-                    icon: IconName::Eye,
-                    tint: c.git_untracked,
+                    glyph: Glyph::Mono(IconName::Eye, c.git_untracked),
                     title: name,
                     caption: "Video".to_string(),
                     rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
                 }
             }
             TabKind::ImageDiff { path, old, new } => Identity {
-                icon: IconName::Replace,
-                tint: c.git_modified,
+                glyph: Glyph::Mono(IconName::Replace, c.git_modified),
                 title: path.clone(),
                 caption: "Image diff".to_string(),
                 rows: vec![
@@ -730,8 +719,7 @@ impl Shell {
                 ],
             },
             TabKind::Diff { path, staged, text } => Identity {
-                icon: IconName::Replace,
-                tint: c.git_modified,
+                glyph: Glyph::Mono(IconName::Replace, c.git_modified),
                 title: path.clone(),
                 caption: if *staged { "Staged diff" } else { "Diff" }.to_string(),
                 rows: vec![
@@ -777,14 +765,11 @@ impl Shell {
                     .border_b_1()
                     .border_color(c.border)
                     .child(
-                        Icon::new(
-                            identity
-                                .as_ref()
-                                .map(|i| i.icon.clone())
-                                .unwrap_or(IconName::Inspector),
-                        )
-                        .small()
-                        .text_color(identity.as_ref().map(|i| i.tint).unwrap_or(c.ink_secondary)),
+                        identity
+                            .as_ref()
+                            .map(|i| i.glyph.clone())
+                            .unwrap_or(Glyph::Mono(IconName::Inspector, c.ink_secondary))
+                            .render(true),
                     )
                     .child(
                         v_flex()

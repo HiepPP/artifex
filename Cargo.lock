@@ -310,6 +310,7 @@ dependencies = [
  "pulldown-cmark",
  "raw-window-handle",
  "rfd",
+ "rust-embed",
  "serde",
  "serde_json",
  "smallvec",

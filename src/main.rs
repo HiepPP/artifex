@@ -15,12 +15,41 @@ mod terminal;
 mod tests;
 mod theme;
 
+use std::borrow::Cow;
+
 use gpui::{
-    AnyView, App, AppContext as _, Bounds, Pixels, Size, TitlebarOptions, WindowBounds,
-    WindowOptions, point, px, size,
+    AnyView, App, AppContext as _, AssetSource, Bounds, Pixels, Result, SharedString, Size,
+    TitlebarOptions, WindowBounds, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, Theme};
 use gpui_component_assets::Assets;
+
+use crate::services::material_icons::{MaterialAssets, PREFIX};
+
+/// The window's single asset source. GPUI resolves every embedded resource
+/// through one source, so the ported Material icons and the gpui-component icon
+/// set are served side by side: a `material-icons/` path hits the ported theme,
+/// everything else falls through to the component assets.
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(rest) = path.strip_prefix(PREFIX) {
+            return Ok(MaterialAssets::get(rest).map(|f| f.data));
+        }
+        Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut items = Assets.list(path)?;
+        items.extend(
+            MaterialAssets::iter()
+                .map(|p| SharedString::from(format!("{PREFIX}{p}")))
+                .filter(|p| p.starts_with(path)),
+        );
+        Ok(items)
+    }
+}
 
 /// Margin kept between the window and the edge of the usable screen area.
 const SCREEN_MARGIN: f32 = 24.;
@@ -56,7 +85,7 @@ fn centered_in_visible_area(requested: Size<Pixels>, cx: &App) -> WindowBounds {
 
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
-    let application = gpui_platform::application().with_assets(Assets);
+    let application = gpui_platform::application().with_assets(AppAssets);
 
     application.run(move |cx: &mut App| {
         gpui_component::init(cx);
