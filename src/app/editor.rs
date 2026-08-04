@@ -14,6 +14,7 @@ use gpui::{
     UTF16Selection, UniformListScrollHandle, Window, canvas, div, px, uniform_list,
 };
 use gpui_component::input::{Input, InputState};
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use gpui_component::{Sizable as _, h_flex, v_flex};
 
 use crate::services::highlight::{Highlighter, Lang, Span, line_starts};
@@ -621,7 +622,11 @@ impl EditorView {
         let mut body = if wrap {
             div().flex_1().min_w(px(0.)).relative()
         } else {
-            div().relative().whitespace_nowrap()
+            div()
+                .relative()
+                .flex_none()
+                .w(char_w * line_cols as f32)
+                .whitespace_nowrap()
         };
         if let Some((start, end)) = sel_cols {
             body = body.child(
@@ -648,6 +653,10 @@ impl EditorView {
 
         h_flex()
             .when(wrap, |this| this.w_full())
+            .when(!wrap, |this| {
+                this.flex_none()
+                    .w(GUTTER_WIDTH + char_w * line_cols as f32)
+            })
             .when(is_cursor_row && sel_cols.is_none(), |this| {
                 this.bg(c.selection.opacity(0.35))
             })
@@ -851,6 +860,19 @@ impl Render for EditorView {
         let c = cx.tokens().c;
         let entity = cx.entity();
         let count = self.lines.len();
+        let longest_line = self
+            .lines
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, line)| line.chars().count())
+            .map(|(row, _)| row);
+        let longest_line_width = self
+            .lines
+            .iter()
+            .map(|line| self.char_w.get() * line.chars().count() as f32)
+            .max()
+            .unwrap_or(px(0.));
+        let content_width = GUTTER_WIDTH + Space::S * 2. + longest_line_width;
         let focus = self.focus.clone();
         let list_entity = entity.clone();
         let canvas_entity = entity.clone();
@@ -860,17 +882,42 @@ impl Render for EditorView {
         let content = if self.wrap {
             self.render_wrapped(c, entity.clone())
         } else {
-            uniform_list("editor-rows", count, move |range, _window, cx| {
-                list_entity.read(cx).render_rows(range, cx)
-            })
-            .track_scroll(&self.scroll)
-            .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
-            .size_full()
-            .p(Space::S)
-            .into_any_element()
+            div()
+                .relative()
+                .size_full()
+                .child(
+                    uniform_list("editor-rows", count, move |range, _window, cx| {
+                        list_entity.read(cx).render_rows(range, cx)
+                    })
+                    .track_scroll(&self.scroll)
+                    .with_width_from_item(longest_line)
+                    .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+                    .with_horizontal_sizing_behavior(
+                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                    )
+                    .size_full()
+                    .p(Space::S),
+                )
+                .into_any_element()
         };
+        let horizontal_scrollbar = (!self.wrap).then(|| {
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(16.))
+                .child(
+                    Scrollbar::horizontal(&self.scroll)
+                        .id("editor-horizontal-scrollbar")
+                        .scroll_size(gpui::size(content_width, px(1.)))
+                        .scrollbar_show(ScrollbarShow::Always),
+                )
+                .into_any_element()
+        });
 
         div()
+            .relative()
             .track_focus(&self.focus)
             .key_context("Editor")
             .size_full()
@@ -909,6 +956,9 @@ impl Render for EditorView {
                 .size_full(),
             )
             .child(content)
+            .when_some(horizontal_scrollbar, |this, scrollbar| {
+                this.child(scrollbar)
+            })
             .when_some(self.render_find_bar(cx), |this, bar| this.child(bar))
             .when_some(self.marked.clone(), |this, text| {
                 this.child(
