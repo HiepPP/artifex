@@ -276,7 +276,9 @@ pub fn init(dark: bool, cx: &mut App) {
     colors.secondary_foreground = c.ink;
     colors.secondary_hover = c.hover;
     colors.secondary_active = c.pressed;
-    colors.selection = c.selection;
+    // Translucent so the selected glyphs stay legible: the kit paints this quad
+    // over the text, and the opaque token would blank the line out.
+    colors.selection = c.selection.opacity(0.5);
     colors.list = c.sidebar;
     colors.list_active = c.selection;
     colors.list_hover = c.hover;

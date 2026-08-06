@@ -1,9 +1,12 @@
 //! Markdown preview.
 //!
 //! Parses with `pulldown-cmark` and renders headings, prose, lists, tables,
-//! code cards and quotes as GPUI elements. `DESIGN.md` also asks for one
-//! selectable native document; GPUI has no equivalent of `NSTextStorage`, so
-//! selection across blocks is out of scope here and recorded as a gap.
+//! code cards and quotes as GPUI elements. Prose blocks (heading, paragraph,
+//! list item, quote) render through `gpui_component::text::TextView`, which
+//! registers with the window-level selection system, so a drag across them
+//! selects text and `cmd-c` copies it. That reparse also restores inline
+//! emphasis, which the plain-text render used to drop. Code cards and tables
+//! keep their bespoke layout and stay non-selectable for now.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -11,9 +14,10 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, IntoElement, ParentElement, Pixels, Render, ScrollHandle,
-    SharedString, Styled as _, Window, canvas, div, px,
+    AnyElement, App, Context, Entity, IntoElement, ListAlignment, ListState, ParentElement, Pixels,
+    Render, SharedString, Styled as _, Window, canvas, div, list, px, rems,
 };
+use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{h_flex, v_flex};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -55,7 +59,12 @@ pub struct MarkdownView {
     path: PathBuf,
     blocks: Vec<Block>,
     headings: Vec<Heading>,
-    scroll: ScrollHandle,
+    /// Virtualised block list. Each prose block is now a `TextView`, far heavier
+    /// than the plain-text `div` it replaced: laying every block out on each
+    /// scroll frame dropped frames on long documents. `list` measures and paints
+    /// only the blocks in the viewport (plus overdraw), so the scroll cost
+    /// tracks the viewport, not the document length.
+    list: ListState,
     /// Measured width of the document column.
     ///
     /// A table needs definite column widths: a flex or percentage cell inside a
@@ -72,7 +81,7 @@ impl MarkdownView {
                 path,
                 blocks: Vec::new(),
                 headings: Vec::new(),
-                scroll: ScrollHandle::new(),
+                list: ListState::new(0, ListAlignment::Top, px(400.)),
                 measure: Rc::new(Cell::new(px(PROSE_WIDTH))),
             };
             view.reload();
@@ -96,6 +105,8 @@ impl MarkdownView {
                 _ => None,
             })
             .collect();
+        // New block count, fresh (unmeasured) items.
+        self.list.reset(self.blocks.len());
     }
 
     pub fn path(&self) -> &Path {
@@ -111,8 +122,7 @@ impl Render for MarkdownView {
         let shows_outline =
             self.headings.len() >= 2 && f32::from(window.viewport_size().width) >= OUTLINE_MIN_HOST;
         let measure = self.measure.clone();
-        let column_width = self.measure.get();
-        let top = self.scroll.top_item();
+        let top = self.list.logical_scroll_top().item_ix;
         let active = self
             .headings
             .iter()
@@ -128,14 +138,13 @@ impl Render for MarkdownView {
             // plain `flex_1` column grows to the widest table instead of
             // wrapping it. Giving the viewport an absolute frame inside a
             // flex-sized box hands it a definite width to lay out against.
-            .child(
+            .child({
+                let view = cx.entity();
+                let colors = c;
                 div().flex_1().min_w(px(0.)).relative().child(
                     v_flex()
-                        .id("markdown-scroll")
-                        .track_scroll(&self.scroll)
                         .absolute()
                         .inset_0()
-                        .overflow_y_scroll()
                         .py(Space::XL)
                         .px(Space::XL)
                         .child(
@@ -152,13 +161,24 @@ impl Render for MarkdownView {
                             .h(px(0.))
                             .flex_none(),
                         )
-                        .children(
-                            self.blocks.iter().map(|block| {
-                                render_block(block, &c, column_width).into_any_element()
-                            }),
+                        // The list is the scroller now. It reads blocks and the
+                        // measured width straight off the entity, so no snapshot
+                        // is cloned into the closure each frame.
+                        .child(
+                            list(self.list.clone(), move |index, _window, cx| {
+                                let view = view.read(cx);
+                                match view.blocks.get(index) {
+                                    Some(block) => {
+                                        render_block(index, block, &colors, view.measure.get())
+                                    }
+                                    None => div().into_any_element(),
+                                }
+                            })
+                            .flex_1()
+                            .min_h(px(0.)),
                         ),
-                ),
-            )
+                )
+            })
             .when(shows_outline, |this| {
                 this.child(
                     v_flex()
@@ -179,7 +199,7 @@ impl Render for MarkdownView {
                         .children(self.headings.iter().enumerate().map(|(index, heading)| {
                             let is_active = index == active;
                             let block = heading.block;
-                            let scroll = self.scroll.clone();
+                            let list = self.list.clone();
                             h_flex()
                                 .id(("outline", index))
                                 .cursor_pointer()
@@ -218,14 +238,26 @@ impl Render for MarkdownView {
                                         .hover(|this| this.text_color(c.ink))
                                         .child(heading.title.clone()),
                                 )
-                                .on_click(move |_, _, _| scroll.scroll_to_top_of_item(block))
+                                .on_click(move |_, _, _| list.scroll_to_reveal_item(block))
                         })),
                 )
             })
     }
 }
 
-fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
+/// A selectable, formatted rendering of one prose block's inline Markdown.
+///
+/// The surrounding block sets the type token, color and measure; the body text
+/// inherits those through the window text style. `paragraph_gap` is zeroed
+/// because each block holds exactly one paragraph, so the kit's default trailing
+/// gap would only add stray space under the block.
+fn prose_text(index: usize, text: String) -> impl IntoElement {
+    TextView::markdown(("md-prose", index), SharedString::from(text))
+        .selectable(true)
+        .style(TextViewStyle::default().paragraph_gap(rems(0.)))
+}
+
+fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
     // Definite widths, not `w_full` plus `max_w`. Text is measured against the
     // width the parent proposes, which is the full column, and the maximum is
     // applied afterwards. A paragraph that wraps to two lines at 640 points
@@ -253,7 +285,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                         .text_size((Type::EDITOR * ratio))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(level == 3, |this| this.text_color(c.accent))
-                        .child(SharedString::from(text)),
+                        .child(prose_text(index, text)),
                 )
                 .when(level <= 2, |this| {
                     this.child(
@@ -278,7 +310,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
             .my((Type::EDITOR * 0.5))
             .text_size(Type::EDITOR)
             .line_height((Type::EDITOR * 1.62))
-            .child(SharedString::from(text))
+            .child(prose_text(index, text))
             .into_any_element(),
         Block::ListItem(depth, text, checked) => h_flex()
             .w(prose)
@@ -313,7 +345,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                     .when(checked == Some(true), |this| {
                         this.text_color(c.ink_secondary).line_through()
                     })
-                    .child(SharedString::from(text)),
+                    .child(prose_text(index, text)),
             )
             .into_any_element(),
         // No `overflow_hidden` on either card: clipping a card whose rows are
@@ -382,7 +414,7 @@ fn render_block(block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
                     .italic()
                     .text_color(c.ink_secondary)
                     .text_size(Type::EDITOR)
-                    .child(SharedString::from(text)),
+                    .child(prose_text(index, text)),
             )
             .into_any_element(),
         Block::Rule => h_flex()
@@ -474,7 +506,14 @@ fn parse(source: &str) -> Vec<Block> {
     options.insert(Options::ENABLE_FOOTNOTES);
 
     let mut blocks = Vec::new();
+    // Plain text, still used for the code cards and table cells.
     let mut text = String::new();
+    // Byte range of the current prose block's inline content, sliced back out
+    // of `source` so `TextView` reparses the raw Markdown (keeping emphasis).
+    // Inline events carry the marker characters in their range; the leading
+    // `#`/`-` of a heading or list marker sits on the container Start, which is
+    // never folded in, so the slice stays free of block markers.
+    let mut span: Option<(usize, usize)> = None;
     let mut list_depth = 0usize;
     let mut task: Option<bool> = None;
     let mut in_code: Option<String> = None;
@@ -483,12 +522,20 @@ fn parse(source: &str) -> Vec<Block> {
     let mut table: Option<Vec<Vec<String>>> = None;
     let mut table_row: Vec<String> = Vec::new();
 
-    for event in Parser::new_ext(source, options) {
+    let raw = |span: Option<(usize, usize)>| -> String {
+        span.and_then(|(start, end)| source.get(start..end))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+
+    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { .. })
             | Event::Start(Tag::Paragraph)
             | Event::Start(Tag::Item) => {
                 text.clear();
+                span = None;
                 if matches!(event, Event::Start(Tag::Item)) {
                     in_item = true;
                     task = None;
@@ -499,13 +546,16 @@ fn parse(source: &str) -> Vec<Block> {
             Event::Start(Tag::BlockQuote(_)) => {
                 in_quote = true;
                 text.clear();
+                span = None;
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 in_quote = false;
-                if !text.trim().is_empty() {
-                    blocks.push(Block::Quote(text.trim().to_string()));
+                let inline = raw(span);
+                if !inline.is_empty() {
+                    blocks.push(Block::Quote(inline));
                 }
                 text.clear();
+                span = None;
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = Some(match kind {
@@ -543,37 +593,68 @@ fn parse(source: &str) -> Vec<Block> {
                     HeadingLevel::H5 => 5,
                     HeadingLevel::H6 => 6,
                 };
-                blocks.push(Block::Heading(level, text.trim().to_string()));
+                blocks.push(Block::Heading(level, raw(span)));
                 text.clear();
+                span = None;
             }
             Event::End(TagEnd::Paragraph) => {
-                if !in_quote && !in_item && !text.trim().is_empty() {
-                    blocks.push(Block::Paragraph(text.trim().to_string()));
+                if !in_quote && !in_item {
+                    let inline = raw(span);
+                    if !inline.is_empty() {
+                        blocks.push(Block::Paragraph(inline));
+                    }
                     text.clear();
+                    span = None;
                 }
             }
             Event::End(TagEnd::Item) => {
                 in_item = false;
-                if !text.trim().is_empty() {
-                    blocks.push(Block::ListItem(
-                        list_depth.saturating_sub(1),
-                        text.trim().to_string(),
-                        task,
-                    ));
+                let inline = raw(span);
+                if !inline.is_empty() {
+                    blocks.push(Block::ListItem(list_depth.saturating_sub(1), inline, task));
                 }
                 text.clear();
+                span = None;
             }
             Event::Rule => blocks.push(Block::Rule),
+            // The checkbox is drawn from `task`, so the `[x]` marker must stay
+            // out of the inline slice.
             Event::TaskListMarker(done) => task = Some(done),
-            Event::Text(chunk) => text.push_str(&chunk),
-            Event::Code(chunk) => text.push_str(&chunk),
-            Event::SoftBreak => text.push(' '),
-            Event::HardBreak => text.push('\n'),
+            Event::Text(chunk) => {
+                text.push_str(&chunk);
+                extend(&mut span, &range);
+            }
+            Event::Code(chunk) => {
+                text.push_str(&chunk);
+                extend(&mut span, &range);
+            }
+            Event::SoftBreak => {
+                text.push(' ');
+                extend(&mut span, &range);
+            }
+            Event::HardBreak => {
+                text.push('\n');
+                extend(&mut span, &range);
+            }
+            // Emphasis, strong, strikethrough and links: the Start range spans
+            // the whole run including its markers, so folding it in keeps the
+            // syntax the reparse needs.
+            Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. }) => {
+                extend(&mut span, &range);
+            }
             _ => {}
         }
     }
 
     blocks
+}
+
+/// Grows `span` to cover `range`, seeding it on the first inline event.
+fn extend(span: &mut Option<(usize, usize)>, range: &std::ops::Range<usize>) {
+    *span = Some(match *span {
+        Some((start, end)) => (start.min(range.start), end.max(range.end)),
+        None => (range.start, range.end),
+    });
 }
 
 #[cfg(test)]
