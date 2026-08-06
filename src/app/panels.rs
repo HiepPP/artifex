@@ -600,7 +600,7 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.workspace_mut()
-                            .open_diff(open_path.clone(), staged, untracked);
+                            .open_diff(open_path.clone(), staged, untracked, cx);
                         cx.notify();
                     }))
                     .into_any_element()
@@ -718,7 +718,7 @@ impl Shell {
                     ),
                 ],
             },
-            TabKind::Diff { path, staged, text } => Identity {
+            TabKind::Diff { path, staged, text, .. } => Identity {
                 glyph: Glyph::Mono(IconName::Replace, c.git_modified),
                 title: path.clone(),
                 caption: if *staged { "Staged diff" } else { "Diff" }.to_string(),

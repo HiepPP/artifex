@@ -83,7 +83,7 @@ main
 | `app/shell.rs` | Window chrome, workspaces, panels, actions, key bindings, status |
 | `app/workspace.rs` | One workspace: root, file tree, tabs, Git snapshot, file index |
 | `app/panels.rs`, `center.rs`, `overlays.rs` | Sidebar, center tabs, floating panels |
-| `app/editor.rs`, `markdown.rs` | Text editing surface and Markdown preview |
+| `app/editor.rs`, `diff.rs`, `markdown.rs` | Text editing surface, diff view, Markdown preview |
 | `terminal/` | PTY lifecycle, grid to runs, key encoding, input-method bridge |
 | `services/` | File index, search, Git, syntax highlighting |
 | `theme.rs` | Every token, the layout breakpoints, and the title-bar inset |
@@ -529,14 +529,25 @@ instead of promising a key that cannot arrive.
   `+++`, mode lines, rename/similarity lines, and `\ No newline` markers.
   Keep hunk headers, line numbers, context, additions, and deletions.
 - Bound a diff preview at 20,000 rendered lines.
+- A text diff is a read-only, editor-grade surface. The reader drag-selects
+  code and copies it with `Cmd-C`; `Cmd-A` selects all. Copy yields the code
+  alone, without line numbers or `+`/`-` signs.
 - Show real file line numbers in two fixed 40-point gutters (old, new), then a
   16-point sign column, all monospaced. An added row fills only the new
   gutter, a deleted row only the old one.
-- Tint the full row background for additions and deletions at low opacity and
-  colour the sign; keep the code text in `ink` so it stays readable.
-- Render a hunk header as its own row: the `@@` range in the accent-adjacent
-  Git colour on a raised band, with the trailing context text in secondary
-  ink. Separate hunks visually by that band, not by blank lines.
+- Rows never wrap. A long line drives a horizontal scrollbar, like the editor.
+- Tint the full row background for additions and deletions at low opacity,
+  across the whole row width, and colour the sign.
+- Syntax-highlight the code. Colours come from two reconstructed
+  pseudo-documents - the new side is context plus additions, the old side is
+  context plus deletions - each parsed once and queried per visible range like
+  the editor.
+- Emphasise the within-line change the way VSCode does. Pair each deleted line
+  with the added line that replaced it, trim the shared prefix and suffix, and
+  paint the differing span in a stronger tint.
+- Render a hunk header as its own row on a raised band: the `@@` range and its
+  trailing context in the accent-adjacent Git colour. Separate hunks visually
+  by that band, not by blank lines.
 
 - An image change opens side by side instead of a text diff: the HEAD blob
   (copied to a temp file) on the left, the working tree on the right, each
@@ -773,6 +784,7 @@ holds, in `~/Library/Application Support/Artifex/session.json`.
 | Center tabs | [src/app/center.rs](src/app/center.rs) |
 | Overlays | [src/app/overlays.rs](src/app/overlays.rs) |
 | Editor | [src/app/editor.rs](src/app/editor.rs) |
+| Diff view | [src/app/diff.rs](src/app/diff.rs) |
 | Markdown preview | [src/app/markdown.rs](src/app/markdown.rs) |
 | Terminal | [src/terminal/mod.rs](src/terminal/mod.rs) |
 | Git | [src/services/git.rs](src/services/git.rs) |

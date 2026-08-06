@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{App, AppContext as _, Entity, Window};
 
+use crate::app::diff::DiffView;
 use crate::app::editor::EditorView;
 use crate::app::markdown::MarkdownView;
 use crate::services::file_index::{self, IndexedFile};
@@ -50,6 +51,7 @@ pub enum TabKind {
         path: String,
         staged: bool,
         text: String,
+        view: Entity<DiffView>,
     },
     /// An image change compares HEAD against the working tree side by side.
     /// `old` is a temp copy of the HEAD blob; a missing side means the file
@@ -355,7 +357,7 @@ impl Workspace {
         self.selected = self.tabs.len() - 1;
     }
 
-    pub fn open_diff(&mut self, path: String, staged: bool, untracked: bool) {
+    pub fn open_diff(&mut self, path: String, staged: bool, untracked: bool, cx: &mut App) {
         // DESIGN.md > Git: a video change opens the working-tree player;
         // there is no meaningful text diff for it.
         if is_video_path(Path::new(&path)) {
@@ -418,6 +420,7 @@ impl Workspace {
             return;
         }
         let text = git::diff(&self.root, &path, staged, untracked);
+        let view = DiffView::new(Path::new(&path), &text, cx);
         if let Some(index) = self.tabs.iter().position(|tab| {
             matches!(&tab.kind, TabKind::Diff { path: p, staged: s, .. } if p == &path && *s == staged)
         }) {
@@ -425,6 +428,7 @@ impl Workspace {
                 path,
                 staged,
                 text,
+                view,
             };
             self.selected = index;
             return;
@@ -440,7 +444,12 @@ impl Workspace {
         self.tabs.push(Tab {
             id,
             title,
-            kind: TabKind::Diff { path, staged, text },
+            kind: TabKind::Diff {
+                path,
+                staged,
+                text,
+                view,
+            },
             preview: false,
         });
         self.selected = self.tabs.len() - 1;

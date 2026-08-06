@@ -1,5 +1,6 @@
 pub mod center;
 pub mod chrome;
+pub mod diff;
 pub mod editor;
 pub mod markdown;
 pub mod overlays;
