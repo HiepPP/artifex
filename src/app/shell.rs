@@ -87,6 +87,10 @@ pub struct Shell {
     pub split: Entity<ResizableState>,
     pub overlay: OverlayState,
     pub status: Option<SharedString>,
+    /// The change-row key currently armed for a one-click-away discard. The
+    /// Git panel shows a first revert click as armed, and only a second click
+    /// on the same row runs the destructive discard. Cleared on a timeout.
+    pub(crate) discard_armed: Option<SharedString>,
     /// `None` when the platform refused a watcher. The Explorer refresh control
     /// and `Workspace: Rebuild File Index` stay the manual fallback.
     watch: Option<WatchHub>,
@@ -132,6 +136,7 @@ impl Shell {
             split,
             overlay: OverlayState::default(),
             status: None,
+            discard_armed: None,
             watch: WatchHub::new(),
             focus: cx.focus_handle(),
             last_session: None,

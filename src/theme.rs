@@ -127,7 +127,7 @@ impl Metrics {
     pub const RAIL_ITEM_GAP: Pixels = px(4.);
 
     pub const SIDEBAR_MIN: Pixels = px(240.);
-    pub const SIDEBAR_IDEAL: Pixels = px(370.);
+    pub const SIDEBAR_IDEAL: Pixels = px(240.);
     pub const SIDEBAR_MAX: Pixels = px(560.);
     pub const CENTER_MIN: Pixels = px(420.);
     pub const INSPECTOR_MIN: Pixels = px(260.);

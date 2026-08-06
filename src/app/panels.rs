@@ -1,8 +1,12 @@
 //! Sidebar (Explorer and Git) and the inspector placeholder.
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::{
-    Context, IntoElement, ParentElement, Pixels, SharedString, Styled as _, div, px, uniform_list,
+    App, ClickEvent, Context, Hsla, IntoElement, ParentElement, SharedString, Styled as _, Window,
+    div, px, uniform_list,
 };
 use gpui_component::input::Input;
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -10,7 +14,31 @@ use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::app::chrome::{Glyph, file_glyph, folder_glyph, icon_button, pill_tab};
 use crate::app::shell::{Shell, SidebarTab};
 use crate::services::git::{self, ChangeKind};
-use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
+use crate::theme::{ActiveTokens as _, Colors, Metrics, Radius, Space, Type};
+
+/// One compact icon button for a change row's hover actions. Smaller than the
+/// toolbar's [`icon_button`] so it fits inside a `Metrics::ROW` line.
+fn change_action_button(
+    id: SharedString,
+    icon: IconName,
+    tint: Hsla,
+    c: Colors,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .cursor_pointer()
+        .flex_none()
+        .size(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(Radius::ROW)
+        .hover(|this| this.bg(c.raised))
+        .active(|this| this.bg(c.pressed))
+        .child(Icon::new(icon).xsmall().text_color(tint))
+        .on_click(on_click)
+}
 
 impl Shell {
     pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -317,10 +345,14 @@ impl Shell {
                                 .child(
                                     Icon::new(IconName::Network)
                                         .xsmall()
+                                        .flex_shrink_0()
                                         .text_color(c.ink_secondary),
                                 )
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .truncate()
                                         .font_family("JetBrains Mono")
                                         .text_size(Type::MICRO)
                                         .child(SharedString::from(snapshot.branch.clone())),
@@ -451,6 +483,7 @@ impl Shell {
         let c = cx.tokens().c;
         let light = !cx.tokens().dark;
         let root = self.workspace().root.clone();
+        let armed = self.discard_armed.clone();
 
         v_flex()
             .w_full()
@@ -475,29 +508,88 @@ impl Shell {
                     ),
             )
             .children(git::change_tree(changes).into_iter().map(|row| {
-                // DESIGN.md > Git: changes render as a directory tree. A
-                // directory row carries no status and no action.
                 let indent = px(12. * row.depth as f32);
                 let Some(change) = row.change.and_then(|index| changes.get(index)) else {
+                    // DESIGN.md > Git: a directory row carries no status. It
+                    // gains one trailing action: revert the whole subtree on
+                    // the unstaged side, unstage it on the staged side.
+                    let prefix = format!("{}/", row.prefix);
+                    let items: Vec<(String, bool)> = changes
+                        .iter()
+                        .filter(|ch| ch.path.starts_with(&prefix))
+                        .map(|ch| (ch.path.clone(), ch.kind == ChangeKind::Untracked))
+                        .collect();
+                    let group = SharedString::from(format!("change-{title}-dir-{}", row.prefix));
+                    let key = SharedString::from(format!("{title}-dir-{}", row.prefix));
+                    let dir_armed = armed.as_ref() == Some(&key);
+                    let dir_root = root.clone();
                     return h_flex()
+                        .id(SharedString::from(format!("{title}-dir-{}", row.prefix)))
+                        .group(group.clone())
                         .h(Metrics::ROW)
                         .w_full()
                         .items_center()
                         .pl(Space::M + indent)
                         .pr(Space::M)
                         .gap(Space::S)
+                        .hover(|this| this.bg(c.hover))
                         .child(
                             Icon::new(IconName::Folder)
                                 .xsmall()
+                                .flex_shrink_0()
                                 .text_color(c.ink_secondary),
                         )
                         .child(
                             div()
+                                .flex_1()
                                 .min_w(px(0.))
                                 .truncate()
                                 .text_size(Type::CAPTION)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(row.label)),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(px(2.))
+                                .opacity(0.)
+                                .when(dir_armed, |this| this.opacity(1.))
+                                .group_hover(group, |this| this.opacity(1.))
+                                .child(if staged {
+                                    change_action_button(
+                                        SharedString::from(format!("unstage-{title}-{}", row.prefix)),
+                                        IconName::Minus,
+                                        c.ink_secondary,
+                                        c,
+                                        cx.listener(move |this, _, _, cx| {
+                                            for (path, _) in &items {
+                                                let _ = git::unstage(&dir_root, path);
+                                            }
+                                            this.set_status("unstaged");
+                                            this.workspace_mut().refresh_git();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    let tint = if dir_armed { c.git_deleted } else { c.ink_secondary };
+                                    change_action_button(
+                                        SharedString::from(format!("revert-{title}-{}", row.prefix)),
+                                        IconName::Undo,
+                                        tint,
+                                        c,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.arm_or_discard(
+                                                key.clone(),
+                                                items.clone(),
+                                                dir_root.clone(),
+                                                cx,
+                                            );
+                                        }),
+                                    )
+                                    .into_any_element()
+                                }),
                         )
                         .into_any_element();
                 };
@@ -515,8 +607,16 @@ impl Shell {
                 let glyph = file_glyph(&name, light);
                 let group = SharedString::from(format!("change-{title}-{path}"));
                 let open_path = path.clone();
-                let action_path = path.clone();
-                let root_for_action = root.clone();
+                let stage_path = path.clone();
+                let stage_root = root.clone();
+                let jump_target = root.join(&path);
+                let revert_key = SharedString::from(format!("{title}-{path}"));
+                let row_armed = armed.as_ref() == Some(&revert_key);
+                let revert_items = vec![(path.clone(), untracked)];
+                let revert_root = root.clone();
+                // Three icons on the unstaged side, two on the staged side, so
+                // the action strip is wider when a revert button is present.
+                let action_w = if staged { px(50.) } else { px(74.) };
 
                 h_flex()
                     .id(SharedString::from(format!("{title}-{path}")))
@@ -540,16 +640,19 @@ impl Shell {
                     )
                     .child(
                         div()
-                            .w(px(58.))
+                            .w(action_w)
                             .h_full()
                             .flex_none()
                             .relative()
                             .child(
+                                // The status letter reads while the row is at
+                                // rest and fades out once the actions appear.
                                 h_flex()
                                     .absolute()
                                     .inset_0()
                                     .items_center()
                                     .justify_end()
+                                    .when(row_armed, |this| this.opacity(0.))
                                     .group_hover(group.clone(), |this| this.opacity(0.))
                                     .child(
                                         div()
@@ -565,37 +668,67 @@ impl Shell {
                                     .inset_0()
                                     .items_center()
                                     .justify_end()
+                                    .gap(px(2.))
                                     .opacity(0.)
+                                    .when(row_armed, |this| this.opacity(1.))
                                     .group_hover(group, |this| this.opacity(1.))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("act-{title}-{path}")))
-                                            .cursor_pointer()
-                                            .px(Space::XS)
-                                            .py(px(1.))
-                                            .rounded(Radius::ROW)
-                                            .bg(c.raised)
-                                            .text_size(Type::MICRO)
-                                            .text_color(c.ink)
-                                            .child(if staged { "unstage" } else { "stage" })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                let result = if staged {
-                                                    git::unstage(&root_for_action, &action_path)
+                                    .child(change_action_button(
+                                        SharedString::from(format!("jump-{title}-{path}")),
+                                        IconName::ExternalLink,
+                                        c.ink_secondary,
+                                        c,
+                                        cx.listener(move |this, _, _, cx| {
+                                            // Keep the row's diff-open from also
+                                            // firing for this click.
+                                            cx.stop_propagation();
+                                            this.workspace_mut()
+                                                .open_file(jump_target.clone(), false, cx);
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .when(!staged, |this| {
+                                        let tint =
+                                            if row_armed { c.git_deleted } else { c.ink_secondary };
+                                        this.child(change_action_button(
+                                            SharedString::from(format!("revert-{title}-{path}")),
+                                            IconName::Undo,
+                                            tint,
+                                            c,
+                                            cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.arm_or_discard(
+                                                    revert_key.clone(),
+                                                    revert_items.clone(),
+                                                    revert_root.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ))
+                                    })
+                                    .child(change_action_button(
+                                        SharedString::from(format!("stage-{title}-{path}")),
+                                        if staged { IconName::Minus } else { IconName::Plus },
+                                        c.ink_secondary,
+                                        c,
+                                        cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            let result = if staged {
+                                                git::unstage(&stage_root, &stage_path)
+                                            } else {
+                                                git::stage(&stage_root, &stage_path)
+                                            };
+                                            match result {
+                                                Ok(()) => this.set_status(if staged {
+                                                    "unstaged"
                                                 } else {
-                                                    git::stage(&root_for_action, &action_path)
-                                                };
-                                                match result {
-                                                    Ok(()) => this.set_status(if staged {
-                                                        "unstaged"
-                                                    } else {
-                                                        "staged"
-                                                    }),
-                                                    Err(err) => this.set_status(err),
-                                                }
-                                                this.workspace_mut().refresh_git();
-                                                cx.notify();
-                                            })),
-                                    ),
+                                                    "staged"
+                                                }),
+                                                Err(err) => this.set_status(err),
+                                            }
+                                            this.workspace_mut().refresh_git();
+                                            cx.notify();
+                                        }),
+                                    )),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -605,6 +738,50 @@ impl Shell {
                     }))
                     .into_any_element()
             }))
+    }
+
+    /// Runs the two-click discard guard for a change row. The first revert
+    /// click arms the row and starts a disarm timer; a second click on the
+    /// same row within the window runs the destructive discard.
+    fn arm_or_discard(
+        &mut self,
+        key: SharedString,
+        items: Vec<(String, bool)>,
+        root: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.discard_armed.as_ref() == Some(&key) {
+            // Second click on the same row: run the destructive discard.
+            self.discard_armed = None;
+            let mut failure = None;
+            for (path, untracked) in &items {
+                if let Err(err) = git::discard(&root, path, *untracked) {
+                    failure = Some(err);
+                    break;
+                }
+            }
+            match failure {
+                Some(err) => self.set_status(err),
+                None => self.set_status("discarded"),
+            }
+            self.workspace_mut().refresh_git();
+            cx.notify();
+        } else {
+            // First click: arm, and disarm on a timeout if not confirmed.
+            self.discard_armed = Some(key.clone());
+            self.set_status("click revert again to discard");
+            cx.spawn(async move |shell, cx| {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let _ = shell.update(cx, |shell, cx| {
+                    if shell.discard_armed.as_ref() == Some(&key) {
+                        shell.discard_armed = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            cx.notify();
+        }
     }
 
     /// The inspector pane. The Swift build hosts the Gemma sidecar here; the

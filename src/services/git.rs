@@ -256,6 +256,17 @@ pub fn unstage(root: &Path, path: &str) -> Result<(), String> {
     git(root, &["restore", "--staged", "--", path]).map(|_| ())
 }
 
+/// Discard the working-tree change for one path, matching VSCode's per-file
+/// "Discard Changes". An untracked file is deleted from disk; any tracked
+/// change is restored from the index. Destructive and unrecoverable.
+pub fn discard(root: &Path, path: &str, untracked: bool) -> Result<(), String> {
+    if untracked {
+        std::fs::remove_file(root.join(path)).map_err(|err| err.to_string())
+    } else {
+        git(root, &["restore", "--", path]).map(|_| ())
+    }
+}
+
 pub fn stage_all(root: &Path) -> Result<(), String> {
     git(root, &["add", "-A"]).map(|_| ())
 }
@@ -321,6 +332,9 @@ pub struct ChangeTreeRow {
     /// Index into the section's `Vec<Change>` for a file row, `None` for a
     /// directory row.
     pub change: Option<usize>,
+    /// Full path prefix from the repo root for a directory row (e.g.
+    /// `src/app`), used to discard the subtree. Empty for a file row.
+    pub prefix: String,
 }
 
 /// Builds the tree rows for one change section. Directories sort before
@@ -347,7 +361,7 @@ pub fn change_tree(changes: &[Change]) -> Vec<ChangeTreeRow> {
         }
     }
 
-    fn walk(node: &Node, depth: usize, rows: &mut Vec<ChangeTreeRow>) {
+    fn walk(node: &Node, depth: usize, base: &str, rows: &mut Vec<ChangeTreeRow>) {
         for (name, child) in &node.dirs {
             // Compact a single-child directory chain into one label.
             let mut label = name.clone();
@@ -360,12 +374,18 @@ pub fn change_tree(changes: &[Change]) -> Vec<ChangeTreeRow> {
                 label.push_str(name);
                 child = next;
             }
+            let prefix = if base.is_empty() {
+                label.clone()
+            } else {
+                format!("{base}/{label}")
+            };
             rows.push(ChangeTreeRow {
                 depth,
                 label,
                 change: None,
+                prefix: prefix.clone(),
             });
-            walk(child, depth + 1, rows);
+            walk(child, depth + 1, &prefix, rows);
         }
         let mut files = node.files.clone();
         files.sort();
@@ -374,12 +394,13 @@ pub fn change_tree(changes: &[Change]) -> Vec<ChangeTreeRow> {
                 depth,
                 label: name,
                 change: Some(index),
+                prefix: String::new(),
             });
         }
     }
 
     let mut rows = Vec::new();
-    walk(&root, 0, &mut rows);
+    walk(&root, 0, "", &mut rows);
     rows
 }
 
