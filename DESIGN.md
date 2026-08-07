@@ -257,8 +257,7 @@ Depth rules:
 | `HEADLINE` | 16 | Panel headers |
 | `TITLE` | 17 | Section titles and strong empty states |
 | `DISPLAY` | 24 | Large empty-state titles |
-| `EDITOR` | 16 | Source editor and Markdown body |
-| `TERMINAL` | 20 | Terminal |
+| `EDITOR` | 16 | Every content surface: editor, diff, terminal, Markdown body |
 
 Type rules:
 
@@ -270,17 +269,29 @@ Type rules:
   value with a floor.
 
 Divergence: Atelier ships three independent text scales, code-ligature control,
-and display sizing tiers. This build has none of them. Text sizes are fixed
-tokens.
+and display sizing tiers. This build has two text scales and no ligature or
+display-tier controls.
 
 ## Zoom
 
-The status bar shows a zoom readout between 80% and 200%, changed by `Cmd-=` and
-`Cmd--`.
+Quick Settings exposes two independent text scales. `Content` runs from 80% to
+200%. `Interface` runs from 80% to 140%. The status bar shows the Content value,
+and `Cmd-=` plus `Cmd--` change Content only.
 
-Divergence: the readout is a value, not an applied scale. Nothing re-renders at
-a different size yet. Either wire it to the render scale or drop the control; do
-not leave a third state where some surfaces scale and others do not.
+Scope: zoom scales the content surfaces - the code editor, the diff view, the
+terminal, and the Markdown preview. All four share the one `Type::EDITOR` base,
+so their text renders at the same size. The value rides the `EditorZoom` global;
+each surface reads it every render. The editor and diff scale `Type::EDITOR` with
+row height, caret, click mapping, and IME bounds following from that size. The
+terminal scales the same base, re-measures its cell, and reflows the PTY grid.
+The Markdown preview scales its `Type::EDITOR`-derived type and rhythm; column
+widths and structural padding stay fixed, so larger text wraps sooner.
+
+Interface scales the workspace rail, toolbar, tab strip, status bar, Explorer,
+Git panel, inspector, find controls, empty states, and overlays. It also updates
+the component theme so input fields follow the same scale. Fixed control heights
+and panel widths do not scale. Both values persist in `settings.json` and restore
+on launch. Rebuilding the light or dark theme preserves both scales.
 
 ## Motion
 
@@ -648,6 +659,23 @@ CSS flexbox but not identical, and each rule below cost a visible bug.
 
 ## Keyboard Rules
 
+The native macOS menu bar exposes the same actions as the shell keymap and
+Command Palette. `src/app/menu.rs` only maps menu items to those shared actions;
+it does not own duplicate behavior. The menu order is Artifex, File, Edit, View,
+Go, Workspaces, Git, and Window. macOS application actions such as Hide,
+Minimize, Full Screen, and Quit remain global actions.
+
+Artifex also shows one macOS status item with the `slider.horizontal.3` symbol.
+It opens a transient quick-settings panel with a fixed 300 point width. The
+vertical panel exposes Content from 80% through 200%, Interface from 80% through
+140%, focus mode, sidebar, inspector, word wrap, dark mode, reset text size, and
+Quit Artifex. The inspector
+control is unavailable outside the wide layout. Controls dispatch shared GPUI
+actions and stay open for repeated changes. `Shell` remains the only state owner
+and publishes the actual values back to AppKit after every render. The panel
+owns only the native surface and action bridge. Its popover moves to the active
+Space, even when the Artifex window is elsewhere.
+
 | Shortcut | Action |
 |---|---|
 | `Cmd-1` .. `Cmd-9` | Select workspace by rail position |
@@ -670,8 +698,8 @@ CSS flexbox but not identical, and each rule below cost a visible bug.
 | `Cmd-Shift-R` | Toggle the sidebar |
 | `Cmd-Shift-T` | Toggle the inspector |
 | `Cmd-Shift-E` | Toggle focus mode |
-| `Cmd-=` | Zoom in, readout only |
-| `Cmd--` | Zoom out, readout only |
+| `Cmd-=` | Zoom in the editor text |
+| `Cmd--` | Zoom out the editor text |
 
 Rules:
 
@@ -685,10 +713,10 @@ Rules:
 - Divergence from the parent app: navigate forward is `Ctrl-=`, not
   `Ctrl-Shift--`. GPUI folds Shift into the produced character for
   punctuation keys, so `Ctrl-Shift--` cannot be told apart from `Ctrl--`.
-- Divergence from the parent app: `Option-Z` word wrap is not ported. The
-  editor renders rows through a fixed-height `uniform_list`, so soft wrap
-  needs a different layout and stays out until that changes. `Cmd-F` finds in
-  the editor here; the parent bound it to the terminal.
+- Divergence from the parent app: the `Option-Z` shortcut is not ported. Word
+  wrap is available from Quick Settings, the View menu, the editor toolbar, and
+  the Command Palette. `Cmd-F` finds in the editor here; the parent bound it to
+  the terminal.
 
 ## Accessibility Rules
 
@@ -752,6 +780,24 @@ Native checks:
   build inside the workspace must not trigger one.
 - Confirm the process reports no panic in its output.
 
+## User Settings
+
+Durable preferences live in
+`~/Library/Application Support/Artifex/settings.json`, independently from the
+open workspace session.
+
+- Stored: Content text scale, Interface text scale, light or dark appearance,
+  sidebar visibility, inspector visibility, and global word wrap.
+- Not stored: focus mode. It is a temporary concentration state and every launch
+  starts with the normal panel layout.
+- `Shell` owns the live values. The AppKit panel only dispatches shared actions
+  and displays the snapshot published by `Shell`.
+- The file is pretty JSON with a schema version. Missing, corrupt, or future
+  files use safe defaults. Each text scale is clamped to its supported range.
+- Writes happen only when the snapshot changes and use a sibling temp file plus
+  rename. If `settings.json` is absent, the first launch migrates appearance,
+  zoom, and panel visibility from the legacy fields in `session.json`.
+
 ## Session Persistence
 
 The shell remembers which workspaces are open and which file tabs each one
@@ -761,7 +807,8 @@ holds, in `~/Library/Application Support/Artifex/session.json`.
   workspace's file tabs with their source/preview mode, and the selected tab.
 - Not stored: terminal tabs (a PTY cannot be serialized; each restored
   workspace opens one fresh terminal), diff tabs (the Git state they showed
-  has moved on), and any editor or scroll state.
+  has moved on), and per-tab editor or scroll state. Global word wrap belongs
+  to `settings.json`.
 - The file is written on every state change, from `render`, only when the
   snapshot differs from the last write, atomically via temp file plus rename.
 - Restore degrades silently. A missing or corrupt session file, a deleted
@@ -779,6 +826,8 @@ holds, in `~/Library/Application Support/Artifex/session.json`.
 | Window, bundle, and modes | [src/main.rs](src/main.rs) |
 | Colors, metrics, typography, breakpoints | [src/theme.rs](src/theme.rs) |
 | Shared chrome components | [src/app/chrome.rs](src/app/chrome.rs) |
+| Native macOS menu | [src/app/menu.rs](src/app/menu.rs) |
+| macOS quick settings | [src/app/quick_settings.rs](src/app/quick_settings.rs) |
 | Shell, rail, split, status bar, actions | [src/app/shell.rs](src/app/shell.rs) |
 | Sidebar and inspector | [src/app/panels.rs](src/app/panels.rs) |
 | Center tabs | [src/app/center.rs](src/app/center.rs) |
@@ -789,6 +838,7 @@ holds, in `~/Library/Application Support/Artifex/session.json`.
 | Terminal | [src/terminal/mod.rs](src/terminal/mod.rs) |
 | Git | [src/services/git.rs](src/services/git.rs) |
 | Filesystem watching | [src/services/watch.rs](src/services/watch.rs) |
+| User settings | [src/services/settings.rs](src/services/settings.rs) |
 | Session persistence | [src/services/session.rs](src/services/session.rs) |
 | Parent design contract | `atelier/DESIGN.md` |
 

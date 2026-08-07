@@ -43,6 +43,7 @@ fn change_action_button(
 impl Shell {
     pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let tab = self.sidebar_tab;
         let changed = self.workspace().git.changed_count();
 
@@ -71,6 +72,7 @@ impl Shell {
                         None,
                         tab == SidebarTab::Explorer,
                         c,
+                        ui_zoom,
                         cx.listener(|this, _, _, cx| {
                             this.sidebar_tab = SidebarTab::Explorer;
                             cx.notify();
@@ -83,6 +85,7 @@ impl Shell {
                         Some(changed),
                         tab == SidebarTab::Git,
                         c,
+                        ui_zoom,
                         cx.listener(|this, _, _, cx| {
                             this.sidebar_tab = SidebarTab::Git;
                             cx.notify();
@@ -97,6 +100,7 @@ impl Shell {
 
     fn render_explorer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let entity = cx.entity();
         let count = self.workspace().tree.rows.len();
         let selected = self
@@ -213,7 +217,7 @@ impl Shell {
                                     div()
                                         .flex_1()
                                         .truncate()
-                                        .text_size(Type::BODY)
+                                        .text_size(Type::BODY * ui_zoom)
                                         .text_color(colors.file_tree_foreground)
                                         .child(SharedString::from(row.entry.name.clone())),
                                 )
@@ -251,6 +255,7 @@ impl Shell {
 
     fn render_git(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let snapshot = self.workspace().git.clone();
         let root = self.workspace().root.clone();
         let name = self.workspace().name.clone();
@@ -298,7 +303,7 @@ impl Shell {
                 this.child(
                     div()
                         .p(Space::L)
-                        .text_size(Type::BODY)
+                        .text_size(Type::BODY * ui_zoom)
                         .text_color(c.ink_secondary)
                         .child("This workspace is not a Git repository."),
                 )
@@ -324,7 +329,7 @@ impl Shell {
                                     div()
                                         .flex_1()
                                         .truncate()
-                                        .text_size(Type::BODY)
+                                        .text_size(Type::BODY * ui_zoom)
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(SharedString::from(name)),
                                 ),
@@ -332,7 +337,7 @@ impl Shell {
                         .child(
                             div()
                                 .font_family("JetBrains Mono")
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .truncate()
                                 .child(SharedString::from(short_root)),
@@ -354,7 +359,7 @@ impl Shell {
                                         .min_w(px(0.))
                                         .truncate()
                                         .font_family("JetBrains Mono")
-                                        .text_size(Type::MICRO)
+                                        .text_size(Type::MICRO * ui_zoom)
                                         .child(SharedString::from(snapshot.branch.clone())),
                                 ),
                         ),
@@ -391,7 +396,7 @@ impl Shell {
                                 .rounded(Radius::CONTROL)
                                 .bg(c.accent)
                                 .text_color(c.accent_ink)
-                                .text_size(Type::BODY)
+                                .text_size(Type::BODY * ui_zoom)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .when(pushing, |this| this.opacity(0.45))
                                 .child(if pushing { "Pushing..." } else { "Push" })
@@ -413,7 +418,7 @@ impl Shell {
                                 .gap(Space::S)
                                 .child(
                                     div()
-                                        .text_size(Type::BODY)
+                                        .text_size(Type::BODY * ui_zoom)
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child("Recent"),
                                 ),
@@ -431,14 +436,14 @@ impl Shell {
                                             div()
                                                 .flex_1()
                                                 .truncate()
-                                                .text_size(Type::BODY)
+                                                .text_size(Type::BODY * ui_zoom)
                                                 .child(SharedString::from(commit.subject.clone())),
                                         )
                                         .child(
                                             div()
                                                 .flex_none()
                                                 .font_family("JetBrains Mono")
-                                                .text_size(Type::MICRO)
+                                                .text_size(Type::MICRO * ui_zoom)
                                                 .text_color(c.ink_secondary)
                                                 .child(SharedString::from(
                                                     commit.short_hash.clone(),
@@ -448,7 +453,7 @@ impl Shell {
                                 .child(
                                     h_flex()
                                         .gap(Space::S)
-                                        .text_size(Type::MICRO)
+                                        .text_size(Type::MICRO * ui_zoom)
                                         .text_color(c.ink_secondary)
                                         .child(SharedString::from(commit.author.clone()))
                                         .child(SharedString::from(git::relative_time(
@@ -481,6 +486,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let root = self.workspace().root.clone();
         let armed = self.discard_armed.clone();
@@ -495,14 +501,14 @@ impl Shell {
                     .gap(Space::S)
                     .child(
                         div()
-                            .text_size(Type::BODY)
+                            .text_size(Type::BODY * ui_zoom)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(title),
                     )
                     .child(
                         div()
                             .font_family("JetBrains Mono")
-                            .text_size(Type::MICRO)
+                            .text_size(Type::MICRO * ui_zoom)
                             .text_color(c.ink_secondary)
                             .child(SharedString::from(changes.len().to_string())),
                     ),
@@ -544,7 +550,7 @@ impl Shell {
                                 .flex_1()
                                 .min_w(px(0.))
                                 .truncate()
-                                .text_size(Type::CAPTION)
+                                .text_size(Type::CAPTION * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(row.label)),
                         )
@@ -635,7 +641,7 @@ impl Shell {
                             .flex_1()
                             .min_w(px(0.))
                             .truncate()
-                            .text_size(Type::BODY)
+                            .text_size(Type::BODY * ui_zoom)
                             .child(SharedString::from(name)),
                     )
                     .child(
@@ -657,7 +663,7 @@ impl Shell {
                                     .child(
                                         div()
                                             .font_family("JetBrains Mono")
-                                            .text_size(Type::MICRO)
+                                            .text_size(Type::MICRO * ui_zoom)
                                             .text_color(colour)
                                             .child(kind.short()),
                                     ),
@@ -791,6 +797,7 @@ impl Shell {
         use crate::app::workspace::TabKind;
 
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let workspace = self.workspace();
         let root = workspace.root.clone();
@@ -956,7 +963,7 @@ impl Shell {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(Type::LABEL)
+                                    .text_size(Type::LABEL * ui_zoom)
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .child(SharedString::from(
                                         identity
@@ -968,7 +975,7 @@ impl Shell {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(Type::MICRO)
+                                    .text_size(Type::MICRO * ui_zoom)
                                     .text_color(c.ink_secondary)
                                     .child(SharedString::from(
                                         identity
@@ -992,14 +999,14 @@ impl Shell {
                                 .gap(px(2.))
                                 .child(
                                     div()
-                                        .text_size(Type::MICRO)
+                                        .text_size(Type::MICRO * ui_zoom)
                                         .text_color(c.ink_secondary)
                                         .child(label),
                                 )
                                 .child(
                                     div()
                                         .font_family("JetBrains Mono")
-                                        .text_size(Type::CAPTION)
+                                        .text_size(Type::CAPTION * ui_zoom)
                                         .child(SharedString::from(value)),
                                 )
                         },

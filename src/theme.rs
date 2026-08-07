@@ -161,7 +161,6 @@ impl Type {
     pub const TITLE: Pixels = px(17.);
     pub const DISPLAY: Pixels = px(24.);
     pub const EDITOR: Pixels = px(16.);
-    pub const TERMINAL: Pixels = px(20.);
 }
 
 /// Layout mode derived from container width. `DESIGN.md` > Window and Modes.
@@ -213,6 +212,37 @@ pub struct AtelierTokens {
 
 impl Global for AtelierTokens {}
 
+/// Content text scale from `Cmd-=`/`Cmd--`. Editor, diff, terminal, and Markdown
+/// read it at render time to scale their shared `Type::EDITOR` base.
+#[derive(Clone, Copy)]
+pub struct EditorZoom(pub f32);
+
+impl Global for EditorZoom {}
+
+/// Interface text scale for chrome, panels, overlays, and component widgets.
+#[derive(Clone, Copy)]
+pub struct UiZoom(pub f32);
+
+impl Global for UiZoom {}
+
+/// Publishes the content scale so every document surface picks it up next render.
+pub fn set_editor_zoom(zoom: f32, cx: &mut App) {
+    cx.set_global(EditorZoom(zoom));
+}
+
+/// Publishes the interface scale and updates gpui-component widgets.
+pub fn set_ui_zoom(zoom: f32, cx: &mut App) {
+    let zoom = zoom.clamp(0.8, 1.4);
+    cx.set_global(UiZoom(zoom));
+    let theme = Theme::global_mut(cx);
+    theme.font_size = Type::UI * zoom;
+    theme.mono_font_size = Type::BODY * zoom;
+}
+
+pub fn ui_zoom(cx: &App) -> f32 {
+    cx.try_global::<UiZoom>().map_or(1.0, |zoom| zoom.0)
+}
+
 impl AtelierTokens {
     fn build(dark: bool) -> Self {
         Self {
@@ -235,6 +265,8 @@ impl ActiveTokens for App {
 /// Installs the Atelier tokens and folds the important ones into the
 /// gpui-component theme so its own widgets sit on the same surfaces.
 pub fn init(dark: bool, cx: &mut App) {
+    let editor_zoom = cx.try_global::<EditorZoom>().map_or(1.0, |zoom| zoom.0);
+    let ui_zoom = cx.try_global::<UiZoom>().map_or(1.0, |zoom| zoom.0);
     Theme::change(
         if dark {
             ThemeMode::Dark
@@ -248,12 +280,14 @@ pub fn init(dark: bool, cx: &mut App) {
     let tokens = AtelierTokens::build(dark);
     let c = tokens.c;
     cx.set_global(tokens);
+    cx.set_global(EditorZoom(editor_zoom));
+    cx.set_global(UiZoom(ui_zoom));
 
     let theme = Theme::global_mut(cx);
     theme.radius = Radius::CONTROL;
     theme.radius_lg = Radius::PANEL;
-    theme.font_size = Type::UI;
-    theme.mono_font_size = Type::BODY;
+    theme.font_size = Type::UI * ui_zoom;
+    theme.mono_font_size = Type::BODY * ui_zoom;
     theme.shadow = false;
 
     let colors = &mut theme.colors;

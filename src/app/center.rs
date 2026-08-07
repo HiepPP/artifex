@@ -29,6 +29,7 @@ impl Shell {
     /// the selected or hovered tab.
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let selected = self.workspace().selected;
         let previewable = match self.workspace().selected_tab().map(|tab| &tab.kind) {
@@ -175,7 +176,7 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .truncate()
-                                    .text_size(Type::LABEL)
+                                    .text_size(Type::LABEL * ui_zoom)
                                     .when(tab.preview, |this| this.italic().opacity(0.72))
                                     .child(SharedString::from(tab.title)),
                             )
@@ -215,9 +216,8 @@ impl Shell {
                             IconName::Menu,
                             wrapped,
                             c,
-                            cx.listener(|this, _, _, cx| {
-                                this.workspace_mut().toggle_wrap(cx);
-                                cx.notify();
+                            cx.listener(|this, _, window, cx| {
+                                this.on_toggle_wrap(&crate::app::shell::ToggleWrap, window, cx)
                             }),
                         ))
                     })
@@ -245,6 +245,7 @@ impl Shell {
 
     fn render_tab_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let selected = self.workspace().selected;
 
         // Every terminal stays mounted. Switching tabs changes visibility, not
@@ -302,8 +303,8 @@ impl Shell {
                         .size_full()
                         .p(Space::M)
                         .gap(Space::M)
-                        .child(image_diff_side("HEAD", old.clone(), c))
-                        .child(image_diff_side("Working", new.clone(), c))
+                        .child(image_diff_side("HEAD", old.clone(), c, ui_zoom))
+                        .child(image_diff_side("Working", new.clone(), c, ui_zoom))
                         .into_any_element(),
                 }),
             },
@@ -313,6 +314,7 @@ impl Shell {
                     "Nothing open",
                     "Pick a file in the Explorer, or press Command-T for a terminal.",
                     c,
+                    ui_zoom,
                 )
                 .into_any_element(),
             ),
@@ -368,6 +370,7 @@ fn image_diff_side(
     label: &'static str,
     path: Option<std::path::PathBuf>,
     c: crate::theme::Colors,
+    ui_zoom: f32,
 ) -> impl IntoElement {
     v_flex()
         .flex_1()
@@ -383,7 +386,7 @@ fn image_diff_side(
                 .px(Space::S)
                 .py(px(3.))
                 .bg(c.raised)
-                .text_size(Type::MICRO)
+                .text_size(Type::MICRO * ui_zoom)
                 .font_family("JetBrains Mono")
                 .text_color(c.ink_secondary)
                 .child(label),
@@ -408,10 +411,9 @@ fn image_diff_side(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(Type::CAPTION)
+                .text_size(Type::CAPTION * ui_zoom)
                 .text_color(c.ink_secondary)
                 .child("absent")
                 .into_any_element(),
         })
 }
-

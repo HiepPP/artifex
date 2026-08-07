@@ -29,7 +29,7 @@ use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use crate::app::editor::{byte_to_col, col_to_byte, ordered, x_to_col, y_to_row};
 use crate::services::git::{DiffRow, parse_diff};
 use crate::services::highlight::{Highlighter, Lang, Span, line_starts};
-use crate::theme::{ActiveTokens as _, Colors, Space, Type};
+use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Space, Type};
 
 /// Two 40-point gutters plus the 16-point sign column: the x-origin of the
 /// selectable text, measured from the padded row start.
@@ -88,6 +88,9 @@ pub struct DiffView {
     /// Monospace advance and the view's frame, captured during paint so a click
     /// maps back to a `(row, byte)` position.
     char_w: std::cell::Cell<Pixels>,
+    /// Text scale from `Cmd-=`/`Cmd--`, refreshed from the `EditorZoom` global
+    /// each render so click math off the render thread stays in step.
+    zoom: std::cell::Cell<f32>,
     content: std::cell::Cell<Bounds<Pixels>>,
 }
 
@@ -202,6 +205,7 @@ impl DiffView {
             cursor_byte: 0,
             dragging: false,
             char_w: std::cell::Cell::new(px(8.)),
+            zoom: std::cell::Cell::new(1.0),
             content: std::cell::Cell::new(Bounds {
                 origin: gpui::point(px(0.), px(0.)),
                 size: gpui::size(px(0.), px(0.)),
@@ -245,6 +249,13 @@ impl DiffView {
         self.cursor_byte = self.lines.get(last).map(|l| l.text.len()).unwrap_or(0);
     }
 
+    /// The rendered monospace size for the current zoom. The diff shares the
+    /// editor's `Type::EDITOR` base so every content surface reads one size. The
+    /// row-height fallback derives from it, so it must read the same scale.
+    fn font_px(&self) -> Pixels {
+        Type::EDITOR * self.zoom.get()
+    }
+
     /// Maps a window-space point to the `(row, byte)` it falls on, using the
     /// frame and advance captured during paint and the live scroll offset.
     fn position_at(&self, pos: Point<Pixels>) -> (usize, usize) {
@@ -257,7 +268,7 @@ impl DiffView {
                 .last_item_size
                 .map(|s| s.contents.height / count as f32)
                 .filter(|h| *h > px(0.))
-                .unwrap_or(px(f32::from(Type::BODY) * 1.4));
+                .unwrap_or(px(f32::from(self.font_px()) * 1.4));
             let offset = st.base_handle.offset();
             (offset.x, offset.y, item_h)
         };
@@ -496,6 +507,8 @@ impl DiffView {
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        self.zoom.set(cx.global::<EditorZoom>().0);
+        let font_px = self.font_px();
         let count = self.lines.len();
         let entity = cx.entity();
         let list_entity = entity.clone();
@@ -526,7 +539,7 @@ impl Render for DiffView {
             .size_full()
             .bg(c.editor)
             .font_family("JetBrains Mono")
-            .text_size(Type::BODY)
+            .text_size(font_px)
             .on_key_down(cx.listener(Self::on_key))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -539,8 +552,8 @@ impl Render for DiffView {
                         let font_id = window.text_system().resolve_font(&font);
                         let cw = window
                             .text_system()
-                            .ch_advance(font_id, Type::BODY)
-                            .unwrap_or(Type::BODY * 0.6);
+                            .ch_advance(font_id, font_px)
+                            .unwrap_or(font_px * 0.6);
                         canvas_entity.update(cx, |this, _| {
                             this.content.set(bounds);
                             this.char_w.set(cw);

@@ -90,6 +90,36 @@ parking_lot = "0.12"
 notify = "8"
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSButton",
+    "NSButtonCell",
+    "NSBox",
+    "NSCell",
+    "NSControl",
+    "NSFont",
+    "NSImage",
+    "NSPopover",
+    "NSResponder",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
+    "NSSwitch",
+    "NSText",
+    "NSTextField",
+    "NSView",
+    "NSViewController",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "objc2-core-foundation",
+] }
+
 [profile.dev]
 codegen-units = 16
 debug = "limited"

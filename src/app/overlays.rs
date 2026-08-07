@@ -389,6 +389,7 @@ impl Shell {
     ) -> Option<AnyElement> {
         let kind = self.overlay.kind?;
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let query = self.overlay.query.clone()?;
         let wide = kind == Overlay::Search;
 
@@ -483,7 +484,7 @@ impl Shell {
                                 .bg(c.chrome)
                                 .border_t_1()
                                 .border_color(c.border)
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(footer)),
                         ))
@@ -505,6 +506,7 @@ impl Shell {
 
     fn render_quick_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let selected = self.overlay.selected;
         let rows: Vec<(usize, String, String)> = self
@@ -540,14 +542,14 @@ impl Shell {
                         .child(
                             div()
                                 .truncate()
-                                .text_size(Type::BODY)
+                                .text_size(Type::BODY * ui_zoom)
                                 .child(SharedString::from(name)),
                         )
                         .child(
                             div()
                                 .truncate()
                                 .font_family("JetBrains Mono")
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(relative)),
                         ),
@@ -561,6 +563,7 @@ impl Shell {
 
     fn render_command_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let selected = self.overlay.selected;
         let commands = self.overlay.commands.clone();
 
@@ -573,11 +576,16 @@ impl Shell {
                 .px(Space::M)
                 .when(index == selected, |this| this.bg(c.selection))
                 .hover(|this| this.bg(c.hover))
-                .child(div().flex_1().text_size(Type::BODY).child(command.title()))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(Type::BODY * ui_zoom)
+                        .child(command.title()),
+                )
                 .child(
                     div()
                         .font_family("JetBrains Mono")
-                        .text_size(Type::MICRO)
+                        .text_size(Type::MICRO * ui_zoom)
                         .text_color(c.ink_secondary)
                         .child(command.shortcut()),
                 )
@@ -590,6 +598,7 @@ impl Shell {
 
     fn render_search_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let mut flat = 0usize;
         let batches = self.overlay.batches.clone();
 
@@ -603,12 +612,12 @@ impl Shell {
                 .child(
                     div()
                         .font_family("JetBrains Mono")
-                        .text_size(Type::CAPTION)
+                        .text_size(Type::CAPTION * ui_zoom)
                         .child(SharedString::from(batch.relative.clone())),
                 )
                 .child(
                     div()
-                        .text_size(Type::MICRO)
+                        .text_size(Type::MICRO * ui_zoom)
                         .text_color(c.ink_secondary)
                         .child(SharedString::from(batch.hits.len().to_string())),
                 );
@@ -632,7 +641,7 @@ impl Shell {
                                 .flex_none()
                                 .text_right()
                                 .font_family("JetBrains Mono")
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .child(SharedString::from(hit.line.to_string())),
                         )
@@ -641,7 +650,7 @@ impl Shell {
                                 .flex_1()
                                 .truncate()
                                 .font_family("JetBrains Mono")
-                                .text_size(Type::CAPTION)
+                                .text_size(Type::CAPTION * ui_zoom)
                                 .child(SharedString::from(hit.text.clone())),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {

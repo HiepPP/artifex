@@ -5,4 +5,5 @@ pub mod highlight;
 pub mod material_icons;
 pub mod search;
 pub mod session;
+pub mod settings;
 pub mod watch;

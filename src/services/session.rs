@@ -19,19 +19,18 @@ const VERSION: u32 = 1;
 pub struct SessionState {
     pub version: u32,
     pub active: usize,
-    // Window state fields carry a default so a version 1 file written before
-    // they existed still loads whole.
-    #[serde(default = "default_true")]
-    pub shows_sidebar: bool,
-    #[serde(default)]
-    pub shows_inspector: bool,
+    // Read-only migration fields from session files written before durable
+    // preferences moved to settings.json. New session files omit them.
+    #[serde(default = "default_true", rename = "shows_sidebar", skip_serializing)]
+    pub legacy_shows_sidebar: bool,
+    #[serde(default, rename = "shows_inspector", skip_serializing)]
+    pub legacy_shows_inspector: bool,
     #[serde(default)]
     pub sidebar_tab: SidebarTabState,
-    #[serde(default = "default_zoom")]
-    pub zoom: f32,
-    /// `None` follows the system appearance, the first-launch behavior.
-    #[serde(default)]
-    pub dark: Option<bool>,
+    #[serde(default = "default_zoom", rename = "zoom", skip_serializing)]
+    pub legacy_zoom: f32,
+    #[serde(default, rename = "dark", skip_serializing)]
+    pub legacy_dark: Option<bool>,
     pub workspaces: Vec<WorkspaceState>,
 }
 
@@ -73,11 +72,11 @@ impl SessionState {
         Self {
             version: VERSION,
             active,
-            shows_sidebar: default_true(),
-            shows_inspector: false,
+            legacy_shows_sidebar: default_true(),
+            legacy_shows_inspector: false,
             sidebar_tab: SidebarTabState::default(),
-            zoom: default_zoom(),
-            dark: None,
+            legacy_zoom: default_zoom(),
+            legacy_dark: None,
             workspaces,
         }
     }

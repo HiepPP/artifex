@@ -103,7 +103,7 @@ pub fn icon_button(
 ///
 /// The tint carries the meaning, so the fill stays a wash of the same colour
 /// rather than a neutral chip competing with the label beside it.
-pub fn count_badge(count: usize, tint: Hsla, _c: Colors) -> impl IntoElement {
+pub fn count_badge(count: usize, tint: Hsla, _c: Colors, ui_zoom: f32) -> impl IntoElement {
     div()
         .flex_none()
         .px(px(5.))
@@ -111,7 +111,7 @@ pub fn count_badge(count: usize, tint: Hsla, _c: Colors) -> impl IntoElement {
         .rounded(Radius::ROW)
         .bg(tint.opacity(0.14))
         .font_family("JetBrains Mono")
-        .text_size(Type::MICRO)
+        .text_size(Type::MICRO * ui_zoom)
         .text_color(tint)
         .child(SharedString::from(count.to_string()))
 }
@@ -126,6 +126,7 @@ pub fn pill_tab(
     count: Option<usize>,
     selected: bool,
     c: Colors,
+    ui_zoom: f32,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let ink = if selected {
@@ -166,13 +167,13 @@ pub fn pill_tab(
             div()
                 .min_w(px(0.))
                 .truncate()
-                .text_size(Type::LABEL)
+                .text_size(Type::LABEL * ui_zoom)
                 .text_color(ink)
                 .when(selected, |this| this.font_weight(gpui::FontWeight::MEDIUM))
                 .child(label),
         )
         .when_some(count.filter(|n| *n > 0), |this, count| {
-            this.child(count_badge(count, c.git_modified, c))
+            this.child(count_badge(count, c.git_modified, c, ui_zoom))
         })
         .on_click(on_click)
 }
@@ -184,6 +185,7 @@ pub fn empty_state(
     title: &'static str,
     message: &'static str,
     c: Colors,
+    ui_zoom: f32,
 ) -> impl IntoElement {
     v_flex()
         .size_full()
@@ -203,7 +205,7 @@ pub fn empty_state(
         .child(
             div()
                 .font_family("Times New Roman")
-                .text_size(Type::TITLE)
+                .text_size(Type::TITLE * ui_zoom)
                 .text_color(c.ink)
                 .child(title),
         )
@@ -211,7 +213,7 @@ pub fn empty_state(
             div()
                 .max_w(px(320.))
                 .text_center()
-                .text_size(Type::BODY)
+                .text_size(Type::BODY * ui_zoom)
                 .text_color(c.ink_secondary)
                 .child(message),
         )
@@ -260,7 +262,7 @@ pub fn folder_glyph(name: &str, expanded: bool, light: bool) -> Glyph {
 
 /// The project command trigger. `DESIGN.md` gives it a 420-point command-centre
 /// width, centred against the whole window and middle-truncated.
-pub fn project_menu(name: &str, path: &str, c: Colors) -> impl IntoElement {
+pub fn project_menu(name: &str, path: &str, c: Colors, ui_zoom: f32) -> impl IntoElement {
     v_flex()
         .id("project-menu")
         .cursor_pointer()
@@ -278,7 +280,7 @@ pub fn project_menu(name: &str, path: &str, c: Colors) -> impl IntoElement {
             div()
                 .max_w_full()
                 .truncate()
-                .text_size(Type::LABEL)
+                .text_size(Type::LABEL * ui_zoom)
                 .text_color(c.ink)
                 .child(SharedString::from(name.to_string())),
         )

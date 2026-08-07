@@ -18,6 +18,7 @@ use crate::app::editor::EditorView;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, Workspace, is_html_path};
 use crate::services::git;
 use crate::services::session;
+use crate::services::settings;
 use crate::services::watch::{RootChange, WatchHub};
 use crate::theme::{self, ActiveTokens as _, LayoutMode, Metrics, Radius, Space, Type};
 
@@ -38,6 +39,10 @@ actions!(
         ToggleWrap,
         ZoomIn,
         ZoomOut,
+        ResetZoom,
+        UiZoomIn,
+        UiZoomOut,
+        ResetUiZoom,
         ToggleAppearance,
         CancelOverlay,
         AddWorkspace,
@@ -83,7 +88,9 @@ pub struct Shell {
     pub focus_mode: bool,
     pub layout: LayoutMode,
     pub zoom: f32,
+    pub ui_zoom: f32,
     pub dark: bool,
+    pub word_wrap: bool,
     pub split: Entity<ResizableState>,
     pub overlay: OverlayState,
     pub status: Option<SharedString>,
@@ -98,30 +105,44 @@ pub struct Shell {
     /// Last session snapshot written to disk. Render compares against it so
     /// only a real state change costs a write.
     last_session: Option<session::SessionState>,
+    /// Last durable preference snapshot scheduled for an atomic write.
+    last_settings: Option<settings::SettingsState>,
 }
 
 impl Shell {
     pub fn build(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let split = cx.new(|_| ResizableState::default());
         let state = session::load();
+        let preferences = settings::load().unwrap_or_else(|| {
+            let mut preferences = settings::SettingsState::default();
+            if let Some(state) = state.as_ref() {
+                preferences.shows_sidebar = state.legacy_shows_sidebar;
+                preferences.shows_inspector = state.legacy_shows_inspector;
+                preferences.content_zoom = state.legacy_zoom.clamp(0.8, 2.0);
+                preferences.dark = state.legacy_dark;
+            }
+            preferences
+        });
+        settings::set_word_wrap(preferences.word_wrap, cx);
         let (workspaces, active) = Self::restore_session(state.as_ref(), window, cx);
 
-        let dark = match state.as_ref().and_then(|state| state.dark) {
+        let dark = match preferences.dark {
             Some(dark) => {
                 theme::set_dark(dark, cx);
                 dark
             }
             None => gpui_component::Theme::global(cx).is_dark(),
         };
-        let shows_sidebar = state.as_ref().is_none_or(|state| state.shows_sidebar);
-        let shows_inspector = state.as_ref().is_some_and(|state| state.shows_inspector);
+        let shows_sidebar = preferences.shows_sidebar;
+        let shows_inspector = preferences.shows_inspector;
         let sidebar_tab = match state.as_ref().map(|state| state.sidebar_tab) {
             Some(session::SidebarTabState::Git) => SidebarTab::Git,
             _ => SidebarTab::Explorer,
         };
-        let zoom = state
-            .as_ref()
-            .map_or(1.0, |state| state.zoom.clamp(0.8, 2.0));
+        let zoom = preferences.content_zoom.clamp(0.8, 2.0);
+        let ui_zoom = preferences.ui_zoom.clamp(0.8, 1.4);
+        theme::set_editor_zoom(zoom, cx);
+        theme::set_ui_zoom(ui_zoom, cx);
 
         let shell = cx.new(|cx| Self {
             workspaces,
@@ -132,7 +153,9 @@ impl Shell {
             focus_mode: false,
             layout: LayoutMode::Standard,
             zoom,
+            ui_zoom,
             dark,
+            word_wrap: preferences.word_wrap,
             split,
             overlay: OverlayState::default(),
             status: None,
@@ -140,6 +163,7 @@ impl Shell {
             watch: WatchHub::new(),
             focus: cx.focus_handle(),
             last_session: None,
+            last_settings: None,
         });
         shell.update(cx, |shell, cx| {
             shell.observe_watch(cx);
@@ -148,6 +172,8 @@ impl Shell {
                 shell.scan_workspace(index, true, true, cx);
             }
         });
+        let focus = shell.read(cx).focus.clone();
+        window.focus(&focus, cx);
         shell
     }
 
@@ -235,6 +261,30 @@ impl Shell {
         .detach();
     }
 
+    /// Writes durable user preferences independently from workspace restore.
+    fn persist_settings(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.settings_snapshot();
+        if self.last_settings.as_ref() == Some(&snapshot) {
+            return;
+        }
+        self.last_settings = Some(snapshot.clone());
+        cx.background_spawn(async move {
+            settings::save(&snapshot);
+        })
+        .detach();
+    }
+
+    fn settings_snapshot(&self) -> settings::SettingsState {
+        let mut state = settings::SettingsState::default();
+        state.shows_sidebar = self.shows_sidebar;
+        state.shows_inspector = self.shows_inspector;
+        state.content_zoom = self.zoom;
+        state.ui_zoom = self.ui_zoom;
+        state.dark = Some(self.dark);
+        state.word_wrap = self.word_wrap;
+        state
+    }
+
     fn session_snapshot(&self) -> session::SessionState {
         let workspaces = self
             .workspaces
@@ -268,14 +318,10 @@ impl Shell {
             })
             .collect();
         let mut state = session::SessionState::new(self.active, workspaces);
-        state.shows_sidebar = self.shows_sidebar;
-        state.shows_inspector = self.shows_inspector;
         state.sidebar_tab = match self.sidebar_tab {
             SidebarTab::Explorer => session::SidebarTabState::Explorer,
             SidebarTab::Git => session::SidebarTabState::Git,
         };
-        state.zoom = self.zoom;
-        state.dark = Some(self.dark);
         state
     }
 
@@ -786,7 +832,11 @@ impl Shell {
     }
 
     pub(crate) fn on_toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
-        self.workspace_mut().toggle_wrap(cx);
+        self.word_wrap = !self.word_wrap;
+        settings::set_word_wrap(self.word_wrap, cx);
+        for workspace in &mut self.workspaces {
+            workspace.toggle_wrap(self.word_wrap, cx);
+        }
         cx.notify();
     }
 
@@ -892,11 +942,37 @@ impl Shell {
 
     fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
         self.zoom = (self.zoom + 0.1).min(2.0);
+        cx.set_global(theme::EditorZoom(self.zoom));
         cx.notify();
     }
 
     fn on_zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
         self.zoom = (self.zoom - 0.1).max(0.8);
+        cx.set_global(theme::EditorZoom(self.zoom));
+        cx.notify();
+    }
+
+    fn on_reset_zoom(&mut self, _: &ResetZoom, _: &mut Window, cx: &mut Context<Self>) {
+        self.zoom = 1.0;
+        cx.set_global(theme::EditorZoom(self.zoom));
+        cx.notify();
+    }
+
+    fn on_ui_zoom_in(&mut self, _: &UiZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.ui_zoom = (self.ui_zoom + 0.1).min(1.4);
+        theme::set_ui_zoom(self.ui_zoom, cx);
+        cx.notify();
+    }
+
+    fn on_ui_zoom_out(&mut self, _: &UiZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.ui_zoom = (self.ui_zoom - 0.1).max(0.8);
+        theme::set_ui_zoom(self.ui_zoom, cx);
+        cx.notify();
+    }
+
+    fn on_reset_ui_zoom(&mut self, _: &ResetUiZoom, _: &mut Window, cx: &mut Context<Self>) {
+        self.ui_zoom = 1.0;
+        theme::set_ui_zoom(self.ui_zoom, cx);
         cx.notify();
     }
 
@@ -930,6 +1006,7 @@ impl Shell {
     /// appearances, one graphite-to-petrol gradient as its only depth effect.
     fn render_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let active = self.active;
         let total = self.workspaces.len();
         let shell = cx.entity();
@@ -964,14 +1041,14 @@ impl Shell {
                     .px(Space::M)
                     .child(
                         div()
-                            .text_size(Type::LABEL)
+                            .text_size(Type::LABEL * ui_zoom)
                             .text_color(c.rail_secondary)
                             .child("Workspaces"),
                     )
                     .child(
                         div()
                             .font_family("JetBrains Mono")
-                            .text_size(Type::MICRO)
+                            .text_size(Type::MICRO * ui_zoom)
                             .text_color(c.rail_secondary)
                             .child(SharedString::from(total.to_string())),
                     ),
@@ -1025,7 +1102,7 @@ impl Shell {
                                                 div()
                                                     .flex_1()
                                                     .truncate()
-                                                    .text_size(Type::BODY)
+                                                    .text_size(Type::BODY * ui_zoom)
                                                     .text_color(c.rail_foreground)
                                                     .when(selected, |this| {
                                                         this.font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1039,7 +1116,7 @@ impl Shell {
                                                     div()
                                                         .flex_none()
                                                         .font_family("JetBrains Mono")
-                                                        .text_size(Type::MICRO)
+                                                        .text_size(Type::MICRO * ui_zoom)
                                                         .text_color(c.rail_foreground)
                                                         .child(SharedString::from(
                                                             changed.to_string(),
@@ -1051,7 +1128,7 @@ impl Shell {
                                         this.child(
                                             div()
                                                 .font_family("JetBrains Mono")
-                                                .text_size(Type::MICRO)
+                                                .text_size(Type::MICRO * ui_zoom)
                                                 .text_color(c.rail_secondary)
                                                 .child(SharedString::from(format!(
                                                     "⌘{}",
@@ -1175,7 +1252,7 @@ impl Shell {
                     )
                     .child(
                         div()
-                            .text_size(Type::LABEL)
+                            .text_size(Type::LABEL * ui_zoom)
                             .text_color(c.rail_foreground)
                             .child("Add Workspace"),
                     )
@@ -1231,7 +1308,7 @@ impl Shell {
                             ))
                             .child(crate::app::chrome::toolbar_drag_filler()),
                     )
-                    .child(project_menu(&name, &path, c))
+                    .child(project_menu(&name, &path, c, self.ui_zoom))
                     .child(
                         h_flex()
                             .flex_1()
@@ -1286,6 +1363,7 @@ impl Shell {
         use crate::app::workspace::TabKind;
 
         let c = cx.tokens().c;
+        let ui_zoom = self.ui_zoom;
         let workspace = self.workspace();
         let branch = if workspace.git.is_repo {
             workspace.git.branch.clone()
@@ -1317,7 +1395,7 @@ impl Shell {
             .bg(crate::app::chrome::chrome_gradient(c))
             .border_t_1()
             .border_color(c.border)
-            .text_size(Type::MICRO)
+            .text_size(Type::MICRO * ui_zoom)
             .text_color(c.ink_secondary)
             .child(
                 h_flex()
@@ -1375,6 +1453,7 @@ impl Focusable for Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.persist_session(cx);
+        self.persist_settings(cx);
         self.sync_webviews(cx);
         let c = cx.tokens().c;
         let title_inset = theme::title_bar_inset(window);
@@ -1386,6 +1465,18 @@ impl Render for Shell {
             self.layout = layout;
         }
 
+        crate::app::quick_settings::sync(crate::app::quick_settings::QuickSettingsSnapshot {
+            zoom: self.zoom,
+            ui_zoom: self.ui_zoom,
+            focus_mode: self.focus_mode,
+            shows_sidebar: self.shows_sidebar,
+            shows_inspector: self.shows_inspector,
+            sidebar_available: layout.allows_sidebar() && !self.focus_mode,
+            inspector_available: layout.allows_inspector() && !self.focus_mode,
+            dark: self.dark,
+            word_wrap: self.word_wrap,
+        });
+
         let show_sidebar = self.shows_sidebar && layout.allows_sidebar() && !self.focus_mode;
         let show_inspector = self.shows_inspector && layout.allows_inspector() && !self.focus_mode;
 
@@ -1396,7 +1487,7 @@ impl Render for Shell {
             .size_full()
             .bg(c.canvas)
             .text_color(c.ink)
-            .text_size(Type::BODY)
+            .text_size(Type::BODY * self.ui_zoom)
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(Self::on_toggle_inspector))
             .on_action(cx.listener(Self::on_toggle_sidebar_tab))
@@ -1417,6 +1508,10 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_toggle_wrap))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
+            .on_action(cx.listener(Self::on_reset_zoom))
+            .on_action(cx.listener(Self::on_ui_zoom_in))
+            .on_action(cx.listener(Self::on_ui_zoom_out))
+            .on_action(cx.listener(Self::on_reset_ui_zoom))
             .on_action(cx.listener(Self::on_toggle_appearance))
             .on_action(cx.listener(Self::on_add_workspace))
             .on_action(cx.listener(Self::on_next_workspace))
@@ -1649,7 +1744,7 @@ struct WorkspaceDragPreview {
 }
 
 impl Render for WorkspaceDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .px(Space::S)
             .py(px(4.))
@@ -1658,7 +1753,7 @@ impl Render for WorkspaceDragPreview {
             .border_color(gpui::white().opacity(0.16))
             .bg(self.c.rail_selection)
             .shadow(crate::app::chrome::shadow_floating())
-            .text_size(Type::BODY)
+            .text_size(Type::BODY * theme::ui_zoom(cx))
             .text_color(self.c.rail_foreground)
             .child(SharedString::from(self.name.clone()))
     }

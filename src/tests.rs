@@ -677,32 +677,80 @@ fn session_load_rejects_missing_corrupt_and_future_files() {
 }
 
 #[test]
-fn session_window_state_round_trips_and_old_files_get_defaults() {
-    use crate::services::session::{self, SessionState, SidebarTabState};
+fn session_legacy_preferences_load_for_settings_migration() {
+    use crate::services::session::{self, SidebarTabState};
     let dir = std::env::temp_dir().join(format!("artifex-session-win-{}", std::process::id()));
     let _ = fs::create_dir_all(&dir);
 
-    // Full round-trip of the window state fields.
-    let path = dir.join("session.json");
-    let mut state = SessionState::new(0, Vec::new());
+    let old = dir.join("old.json");
+    fs::write(
+        &old,
+        r#"{
+            "version": 1,
+            "active": 0,
+            "shows_sidebar": false,
+            "shows_inspector": true,
+            "sidebar_tab": "Git",
+            "zoom": 1.4,
+            "dark": true,
+            "workspaces": []
+        }"#,
+    )
+    .unwrap();
+    let loaded = session::load_from(&old).expect("old file loads");
+    assert!(!loaded.legacy_shows_sidebar);
+    assert!(loaded.legacy_shows_inspector);
+    assert!(loaded.sidebar_tab == SidebarTabState::Git);
+    assert!(loaded.legacy_zoom == 1.4);
+    assert!(loaded.legacy_dark == Some(true));
+
+    let rewritten = dir.join("rewritten.json");
+    session::save_to(&loaded, &rewritten);
+    let text = fs::read_to_string(rewritten).expect("rewritten session exists");
+    assert!(!text.contains("shows_sidebar"));
+    assert!(!text.contains("shows_inspector"));
+    assert!(!text.contains("\"zoom\""));
+    assert!(!text.contains("\"dark\""));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn settings_round_trip_normalizes_zoom_and_rejects_future_versions() {
+    use crate::services::settings::{self, SettingsState};
+    let dir = std::env::temp_dir().join(format!("artifex-settings-{}", std::process::id()));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("settings.json");
+
+    let mut state = SettingsState::default();
     state.shows_sidebar = false;
     state.shows_inspector = true;
-    state.sidebar_tab = SidebarTabState::Git;
-    state.zoom = 1.4;
+    state.content_zoom = 9.0;
+    state.ui_zoom = 9.0;
     state.dark = Some(true);
-    session::save_to(&state, &path);
-    assert!(session::load_from(&path).expect("state loads back") == state);
+    state.word_wrap = true;
+    settings::save_to(&state, &path);
 
-    // A version 1 file written before the window state fields existed still
-    // loads whole, with defaults.
-    let old = dir.join("old.json");
-    fs::write(&old, r#"{ "version": 1, "active": 0, "workspaces": [] }"#).unwrap();
-    let loaded = session::load_from(&old).expect("old file loads");
-    assert!(loaded.shows_sidebar);
-    assert!(!loaded.shows_inspector);
-    assert!(loaded.sidebar_tab == SidebarTabState::Explorer);
-    assert!(loaded.zoom == 1.0);
-    assert!(loaded.dark.is_none());
+    let loaded = settings::load_from(&path).expect("settings load back");
+    assert!(!loaded.shows_sidebar);
+    assert!(loaded.shows_inspector);
+    assert!(loaded.content_zoom == 2.0);
+    assert!(loaded.ui_zoom == 1.4);
+    assert!(loaded.dark == Some(true));
+    assert!(loaded.word_wrap);
+
+    fs::write(
+        &path,
+        r#"{"version":1,"shows_sidebar":true,"content_zoom":1.2}"#,
+    )
+    .unwrap();
+    let upgraded = settings::load_from(&path).expect("older settings get defaults");
+    assert!(upgraded.content_zoom == 1.2);
+    assert!(upgraded.ui_zoom == 1.0);
+
+    state.version = 99;
+    fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();
+    assert!(settings::load_from(&path).is_none());
 
     let _ = fs::remove_dir_all(&dir);
 }

@@ -28,7 +28,7 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex};
 
-use crate::theme::{ActiveTokens as _, Space, Type};
+use crate::theme::{ActiveTokens as _, EditorZoom, Space, Type};
 
 pub use colors::TerminalPalette;
 
@@ -363,6 +363,7 @@ impl Render for TerminalView {
         let c = cx.tokens().c;
         let palette = TerminalPalette::for_theme(cx.tokens().dark);
         let (rows, cursor) = self.rows(cx);
+        let font_size = Type::EDITOR * cx.global::<EditorZoom>().0;
         let cell_h = self.cell.height;
         let cell_w = self.cell.width;
         let entity = cx.entity();
@@ -384,7 +385,11 @@ impl Render for TerminalView {
                 canvas(
                     |bounds, _, _| bounds,
                     move |_, bounds, window, cx| {
+                        // Re-measure the cell each paint so a zoom change reflows
+                        // the grid to the new glyph size before it is resized.
+                        let cell = measure_cell(window, cx);
                         entity.update(cx, |this: &mut TerminalView, cx| {
+                            this.cell = cell;
                             this.resize_to(bounds);
                             cx.notify();
                         });
@@ -402,7 +407,7 @@ impl Render for TerminalView {
                 v_flex()
                     .size_full()
                     .font_family("JetBrains Mono")
-                    .text_size(Type::TERMINAL)
+                    .text_size(font_size)
                     // GPUI text defaults to a golden-ratio line box (~1.62x),
                     // taller than the grid cell measured at 1.3x. Pin the line
                     // box to the cell so each row tiles the grid exactly:
@@ -616,14 +621,13 @@ pub(crate) fn paste_payload(text: &str, bracketed: bool) -> String {
 /// Measures one monospace cell so the grid maps onto pixels.
 fn measure_cell(window: &mut Window, cx: &mut App) -> gpui::Size<Pixels> {
     let font = gpui::font("JetBrains Mono");
-    let font_size = Type::TERMINAL;
+    let font_size = Type::EDITOR * cx.global::<EditorZoom>().0;
     let line_height = px((f32::from(font_size) * 1.3).round());
     let font_id = window.text_system().resolve_font(&font);
     let width = window
         .text_system()
         .ch_advance(font_id, font_size)
         .unwrap_or(font_size * 0.6);
-    let _ = cx;
     gpui::size(width, line_height)
 }
 

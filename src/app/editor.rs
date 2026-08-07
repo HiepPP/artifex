@@ -19,7 +19,8 @@ use gpui_component::{Sizable as _, h_flex, v_flex};
 
 use crate::services::highlight::{Highlighter, Lang, Span, line_starts};
 use crate::services::search::{LineMatch, find_in_lines};
-use crate::theme::{ActiveTokens as _, Colors, Radius, Space, Type};
+use crate::services::settings;
+use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Radius, Space, Type, UiZoom};
 
 const GUTTER_WIDTH: Pixels = px(56.);
 
@@ -41,6 +42,9 @@ pub struct EditorView {
     /// Monospace advance and the editor's frame, captured during paint so a
     /// click can be mapped back to a `(row, byte)` position.
     char_w: std::cell::Cell<Pixels>,
+    /// Text scale from `Cmd-=`/`Cmd--`, refreshed from the `EditorZoom` global
+    /// each render so click and IME math off the render thread stay in step.
+    zoom: std::cell::Cell<f32>,
     content: std::cell::Cell<Bounds<Pixels>>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
@@ -75,7 +79,7 @@ impl EditorView {
         cx.new(|cx| Self {
             path,
             dirty: false,
-            wrap: false,
+            wrap: settings::word_wrap(cx),
             lines,
             highlighter,
             line_starts: starts,
@@ -85,6 +89,7 @@ impl EditorView {
             anchor: None,
             dragging: false,
             char_w: std::cell::Cell::new(px(8.)),
+            zoom: std::cell::Cell::new(1.0),
             content: std::cell::Cell::new(Bounds {
                 origin: gpui::point(px(0.), px(0.)),
                 size: gpui::size(px(0.), px(0.)),
@@ -464,6 +469,12 @@ impl EditorView {
         self.cursor_byte = self.lines.get(last).map(|l| l.len()).unwrap_or(0);
     }
 
+    /// The rendered monospace size for the current zoom. Row height and IME
+    /// bounds derive from this, so they must read the same scale render does.
+    fn font_px(&self) -> Pixels {
+        Type::EDITOR * self.zoom.get()
+    }
+
     /// Maps a window-space point to the `(row, byte)` it falls on, using the
     /// frame and advance captured during paint and the live scroll offset.
     fn position_at(&self, pos: Point<Pixels>) -> (usize, usize) {
@@ -478,7 +489,7 @@ impl EditorView {
                 .last_item_size
                 .map(|s| s.contents.height / count as f32)
                 .filter(|h| *h > px(0.))
-                .unwrap_or(px(f32::from(Type::EDITOR) * 1.4));
+                .unwrap_or(px(f32::from(self.font_px()) * 1.4));
             let offset = st.base_handle.offset();
             (offset.x, offset.y, item_h)
         };
@@ -774,6 +785,7 @@ impl EditorView {
     fn render_find_bar(&self, cx: &Context<Self>) -> Option<gpui::AnyElement> {
         let find = self.find.as_ref()?;
         let c = cx.tokens().c;
+        let ui_zoom = cx.global::<UiZoom>().0;
         let counter = if find.cached.is_empty() {
             String::new()
         } else if find.matches.is_empty() {
@@ -791,7 +803,7 @@ impl EditorView {
                 .rounded(Radius::CONTROL)
                 .border_1()
                 .border_color(c.border)
-                .text_size(Type::MICRO)
+                .text_size(Type::MICRO * ui_zoom)
                 .child(label)
         };
 
@@ -814,7 +826,7 @@ impl EditorView {
                         .child(div().w(px(200.)).child(Input::new(&find.query).xsmall()))
                         .child(
                             div()
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
                                 .font_family("JetBrains Mono")
                                 .child(SharedString::from(counter)),
@@ -858,6 +870,8 @@ impl Render for EditorView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_matches(cx);
         let c = cx.tokens().c;
+        self.zoom.set(cx.global::<EditorZoom>().0);
+        let font_px = self.font_px();
         let entity = cx.entity();
         let count = self.lines.len();
         let longest_line = self
@@ -924,7 +938,7 @@ impl Render for EditorView {
             .bg(c.editor)
             .text_color(c.ink)
             .font_family("JetBrains Mono")
-            .text_size(Type::EDITOR)
+            .text_size(font_px)
             .on_key_down(cx.listener(Self::on_key))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -939,8 +953,8 @@ impl Render for EditorView {
                         let font_id = window.text_system().resolve_font(&font);
                         let cw = window
                             .text_system()
-                            .ch_advance(font_id, Type::EDITOR)
-                            .unwrap_or(Type::EDITOR * 0.6);
+                            .ch_advance(font_id, font_px)
+                            .unwrap_or(font_px * 0.6);
                         canvas_entity.update(cx, |this, _| {
                             this.content.set(bounds);
                             this.char_w.set(cw);
@@ -1045,7 +1059,7 @@ impl EntityInputHandler for EditorView {
     ) -> Option<Bounds<Pixels>> {
         Some(Bounds {
             origin: element_bounds.origin,
-            size: gpui::size(px(2.), (Type::EDITOR * 1.4)),
+            size: gpui::size(px(2.), (self.font_px() * 1.4)),
         })
     }
 

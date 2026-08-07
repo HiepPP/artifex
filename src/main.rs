@@ -129,6 +129,8 @@ fn main() {
                 // component kit registers its own `escape` for the query field
                 // while the root is being built.
                 app::shell::bind_keys(cx);
+                app::menu::init(cx);
+                app::quick_settings::init(cx);
                 root
             });
 

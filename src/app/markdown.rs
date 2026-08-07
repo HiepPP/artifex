@@ -21,7 +21,7 @@ use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{h_flex, v_flex};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::theme::{ActiveTokens as _, Colors, Radius, Space, Type};
+use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Radius, Space, Type};
 
 /// `DESIGN.md` > documentMaxWidth / documentBleedMaxWidth.
 const PROSE_WIDTH: f32 = 640.;
@@ -117,6 +117,7 @@ impl MarkdownView {
 impl Render for MarkdownView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let zoom = cx.global::<EditorZoom>().0;
         // DESIGN.md hides the rail when the column is too narrow to keep a
         // readable measure, and needs at least two headings to be worth it.
         let shows_outline =
@@ -169,7 +170,7 @@ impl Render for MarkdownView {
                                 let view = view.read(cx);
                                 match view.blocks.get(index) {
                                     Some(block) => {
-                                        render_block(index, block, &colors, view.measure.get())
+                                        render_block(index, block, &colors, view.measure.get(), zoom)
                                     }
                                     None => div().into_any_element(),
                                 }
@@ -192,7 +193,7 @@ impl Render for MarkdownView {
                         .child(
                             div()
                                 .pb(Space::S)
-                                .text_size(Type::MICRO)
+                                .text_size(Type::MICRO * zoom)
                                 .text_color(c.ink_secondary)
                                 .child("ON THIS PAGE"),
                         )
@@ -224,9 +225,9 @@ impl Render for MarkdownView {
                                         .truncate()
                                         .pl(px((heading.level.saturating_sub(1) as f32) * 10.))
                                         .text_size(if heading.level <= 2 {
-                                            Type::CAPTION
+                                            Type::CAPTION * zoom
                                         } else {
-                                            Type::MICRO
+                                            Type::MICRO * zoom
                                         })
                                         .text_color(if is_active {
                                             c.accent
@@ -257,7 +258,7 @@ fn prose_text(index: usize, text: String) -> impl IntoElement {
         .style(TextViewStyle::default().paragraph_gap(rems(0.)))
 }
 
-fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> AnyElement {
+fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: f32) -> AnyElement {
     // Definite widths, not `w_full` plus `max_w`. Text is measured against the
     // width the parent proposes, which is the full column, and the maximum is
     // applied afterwards. A paragraph that wraps to two lines at 640 points
@@ -265,6 +266,10 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
     // top of it and a long line is cut off at the column edge.
     let prose = px(f32::from(measure).min(PROSE_WIDTH));
     let bleed = px(f32::from(measure).min(BLEED_WIDTH));
+    // Zoom scales the type and the rhythm derived from it; the column widths
+    // and structural padding stay fixed, so bigger text simply wraps sooner.
+    let ed = Type::EDITOR * zoom;
+    let micro = Type::MICRO * zoom;
 
     match block.clone() {
         Block::Heading(level, text) => {
@@ -278,11 +283,11 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
             v_flex()
                 .w(prose)
                 .mx_auto()
-                .mt((Type::EDITOR * 1.4))
-                .mb((Type::EDITOR * 0.5))
+                .mt((ed * 1.4))
+                .mb((ed * 0.5))
                 .child(
                     div()
-                        .text_size((Type::EDITOR * ratio))
+                        .text_size((ed * ratio))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(level == 3, |this| this.text_color(c.accent))
                         .child(prose_text(index, text)),
@@ -307,9 +312,9 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
         Block::Paragraph(text) => div()
             .w(prose)
             .mx_auto()
-            .my((Type::EDITOR * 0.5))
-            .text_size(Type::EDITOR)
-            .line_height((Type::EDITOR * 1.62))
+            .my((ed * 0.5))
+            .text_size(ed)
+            .line_height((ed * 1.62))
             .child(prose_text(index, text))
             .into_any_element(),
         Block::ListItem(depth, text, checked) => h_flex()
@@ -340,8 +345,8 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                 div()
                     .flex_1()
                     .min_w(px(0.))
-                    .text_size(Type::EDITOR)
-                    .line_height((Type::EDITOR * 1.55))
+                    .text_size(ed)
+                    .line_height((ed * 1.55))
                     .when(checked == Some(true), |this| {
                         this.text_color(c.ink_secondary).line_through()
                     })
@@ -354,7 +359,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
         Block::Code(language, text) => v_flex()
             .w(bleed)
             .mx_auto()
-            .my((Type::EDITOR * 1.25))
+            .my((ed * 1.25))
             .rounded(Radius::CONTROL)
             .border_1()
             .border_color(c.border)
@@ -364,7 +369,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                     .px(Space::M)
                     .py(Space::XS)
                     .bg(c.raised)
-                    .text_size(Type::MICRO)
+                    .text_size(micro)
                     .text_color(c.ink_secondary)
                     .child(SharedString::from(if language.is_empty() {
                         "code".to_string()
@@ -378,8 +383,8 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                     .p(Space::M)
                     .bg(c.panel)
                     .font_family("JetBrains Mono")
-                    .text_size((Type::EDITOR * 0.92))
-                    .line_height((Type::EDITOR * 1.35))
+                    .text_size((ed * 0.92))
+                    .line_height((ed * 1.35))
                     .children(text.lines().enumerate().map(|(index, line)| {
                         h_flex()
                             .child(
@@ -403,7 +408,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
         Block::Quote(text) => h_flex()
             .w(prose)
             .mx_auto()
-            .my((Type::EDITOR * 1.25))
+            .my((ed * 1.25))
             .items_stretch()
             .child(div().w(px(3.)).flex_none().bg(c.accent))
             .child(
@@ -413,14 +418,14 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                     .pl(Space::M)
                     .italic()
                     .text_color(c.ink_secondary)
-                    .text_size(Type::EDITOR)
+                    .text_size(ed)
                     .child(prose_text(index, text)),
             )
             .into_any_element(),
         Block::Rule => h_flex()
             .w(prose)
             .mx_auto()
-            .my((Type::EDITOR * 1.75))
+            .my((ed * 1.75))
             .justify_center()
             .gap(Space::S)
             .child(dot(c.border))
@@ -457,7 +462,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                 .w(px(card))
                 .flex_none()
                 .mx_auto()
-                .my(Type::EDITOR * 1.25)
+                .my(ed * 1.25)
                 .rounded(Radius::CONTROL)
                 .border_1()
                 .border_color(c.border)
@@ -468,7 +473,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                             .flex_none()
                             .px(Space::M)
                             .py(Space::S)
-                            .text_size(Type::EDITOR * 0.9)
+                            .text_size(ed * 0.9)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(SharedString::from(cell))
                     }),
@@ -484,8 +489,8 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels) -> Any
                                 .flex_none()
                                 .px(Space::M)
                                 .py(Space::S)
-                                .text_size(Type::EDITOR * 0.9)
-                                .line_height(Type::EDITOR * 1.45)
+                                .text_size(ed * 0.9)
+                                .line_height(ed * 1.45)
                                 .child(SharedString::from(cell))
                         }))
                 }))
