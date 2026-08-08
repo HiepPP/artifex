@@ -4,10 +4,10 @@ use gpui::{App, KeyBinding, Menu, MenuItem, SystemMenuType, actions};
 
 use crate::app::shell::{
     AddWorkspace, CloseTab, CommandPalette, CommitPush, FindInFile, FindNext, FindPrev,
-    FindReplace, NavigateBack, NavigateForward, NewTerminal, QuickOpen, RevealInExplorer, SaveFile,
-    SearchAllFiles, ToggleAppearance, ToggleFocusMode, ToggleInspector, TogglePreview,
-    ToggleSidebar, ToggleSidebarTab, ToggleWrap, Workspace1, Workspace2, Workspace3, Workspace4,
-    Workspace5, Workspace6, Workspace7, Workspace8, Workspace9, ZoomIn, ZoomOut,
+    FindReplace, NavigateBack, NavigateForward, NewTerminal, NextWorkspace, QuickOpen,
+    RevealInExplorer, SaveFile, SearchAllFiles, ToggleAppearance, ToggleFocusMode, ToggleInspector,
+    TogglePreview, ToggleSidebar, ToggleSidebarTab, ToggleWrap, Workspace1, Workspace2, Workspace3,
+    Workspace4, Workspace5, Workspace6, Workspace7, Workspace8, Workspace9, ZoomIn, ZoomOut,
 };
 
 actions!(
@@ -103,6 +103,7 @@ fn app_menus() -> Vec<Menu> {
         ]),
         Menu::new("Workspaces").items([
             MenuItem::action("Open New Workspace...", AddWorkspace),
+            MenuItem::action("Next Workspace", NextWorkspace),
             MenuItem::separator(),
             MenuItem::action("Workspace 1", Workspace1),
             MenuItem::action("Workspace 2", Workspace2),
@@ -146,5 +147,21 @@ mod tests {
                 "Window",
             ]
         );
+    }
+
+    #[test]
+    fn workspaces_menu_exposes_next_workspace_action() {
+        let menus = app_menus();
+        let names: Vec<&str> = menus
+            .iter()
+            .filter(|menu| menu.name.as_ref() == "Workspaces")
+            .flat_map(|menu| menu.items.iter())
+            .filter_map(|item| match item {
+                MenuItem::Action { name, .. } => Some(name.as_ref()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(names.contains(&"Next Workspace"));
     }
 }
