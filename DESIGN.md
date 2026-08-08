@@ -426,6 +426,7 @@ of inactive sessions. Every workspace stays fully live for the run.
   a top-lit hairline. No accent top rule, no selection border.
 - Mark a preview tab with italic label text at `0.72` opacity. Do not add another
   icon.
+- Double click a preview tab to promote it to a permanent tab.
 - Place the close control at the leading edge of a closable tab. A tab that
   cannot close carries no close slot at all, so it has no empty gutter.
 - Keep the final terminal tab open and non-closable.

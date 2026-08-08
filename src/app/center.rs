@@ -1,7 +1,10 @@
 //! Center tab strip and tab content.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled as _, div, px};
+use gpui::{
+    AnyElement, Context, IntoElement, MouseButton, ParentElement, SharedString, Styled as _, div,
+    px,
+};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{Glyph, empty_state, file_glyph, icon_button};
@@ -178,6 +181,18 @@ impl Shell {
                                     .text_size(Type::LABEL * ui_zoom)
                                     .when(tab.preview, |this| this.italic().opacity(0.72))
                                     .child(SharedString::from(tab.title)),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                    if event.click_count >= 2
+                                        && let Some(tab) =
+                                            this.workspace_mut().tabs.get_mut(index)
+                                    {
+                                        tab.preview = false;
+                                        cx.notify();
+                                    }
+                                }),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.workspace_mut().selected = index;
