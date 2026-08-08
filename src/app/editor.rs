@@ -39,6 +39,9 @@ pub struct EditorView {
     anchor: Option<(usize, usize)>,
     /// True while a mouse drag is extending the selection.
     dragging: bool,
+    /// First click on a token. This backs up the native click count when the
+    /// platform reports two quick presses as separate clicks.
+    last_token_click: Option<(std::time::Instant, usize, std::ops::Range<usize>)>,
     /// Monospace advance and the editor's frame, captured during paint so a
     /// click can be mapped back to a `(row, byte)` position.
     char_w: std::cell::Cell<Pixels>,
@@ -88,6 +91,7 @@ impl EditorView {
             cursor_byte: 0,
             anchor: None,
             dragging: false,
+            last_token_click: None,
             char_w: std::cell::Cell::new(px(8.)),
             zoom: std::cell::Cell::new(1.0),
             content: std::cell::Cell::new(Bounds {
@@ -520,6 +524,43 @@ impl EditorView {
         self.anchor = None;
     }
 
+    /// Selects the identifier token touching `byte` on `row`.
+    fn select_token(&mut self, row: usize, byte: usize) {
+        let Some(line) = self.lines.get(row) else {
+            self.anchor = None;
+            return;
+        };
+        let Some(range) = token_range(line, byte) else {
+            self.anchor = None;
+            return;
+        };
+        self.anchor = Some((row, range.start));
+        self.cursor_row = row;
+        self.cursor_byte = range.end;
+    }
+
+    fn is_token_double_click(&mut self, row: usize, byte: usize, click_count: usize) -> bool {
+        let now = std::time::Instant::now();
+        let range = self.lines.get(row).and_then(|line| token_range(line, byte));
+        let repeated = range.as_ref().is_some_and(|range| {
+            self.last_token_click
+                .as_ref()
+                .is_some_and(|(last_at, last_row, last_range)| {
+                    *last_row == row
+                        && last_range == range
+                        && now.saturating_duration_since(*last_at)
+                            <= std::time::Duration::from_millis(750)
+                })
+        });
+        let double_click = click_count >= 2 || repeated;
+        self.last_token_click = if double_click {
+            None
+        } else {
+            range.map(|range| (now, row, range))
+        };
+        double_click
+    }
+
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // Wrapped rows carry their own click handler; the whole-editor mapping
         // assumes fixed-height virtualised rows, so it must not run here.
@@ -527,10 +568,16 @@ impl EditorView {
             return;
         }
         let (row, byte) = self.position_at(event.position);
+        let double_click = self.is_token_double_click(row, byte, event.click_count);
         self.cursor_row = row;
         self.cursor_byte = byte;
-        self.anchor = Some((row, byte));
-        self.dragging = true;
+        if double_click {
+            self.select_token(row, byte);
+            self.dragging = false;
+        } else {
+            self.anchor = Some((row, byte));
+            self.dragging = true;
+        }
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -711,6 +758,9 @@ impl EditorView {
                         let pos = event.position;
                         handler.update(cx, |this, cx| {
                             this.place_caret_wrapped(row, pos);
+                            if this.is_token_double_click(row, this.cursor_byte, event.click_count) {
+                                this.select_token(row, this.cursor_byte);
+                            }
                             window.focus(&this.focus, cx);
                             cx.notify();
                         });
@@ -1108,4 +1158,61 @@ pub(crate) fn y_to_row(y: Pixels, row_h: Pixels, first_row: usize, max_row: usiz
 /// Orders two `(row, byte)` positions low-to-high.
 pub(crate) fn ordered(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
     if a <= b { (a, b) } else { (b, a) }
+}
+
+/// Identifier token touching `byte`. Punctuation checks its right token first,
+/// then its left token, so rounded caret positions stay forgiving.
+pub(crate) fn token_range(line: &str, byte: usize) -> Option<std::ops::Range<usize>> {
+    let mut at = byte.min(line.len());
+    while at > 0 && !line.is_char_boundary(at) {
+        at -= 1;
+    }
+
+    let current = line.get(at..).and_then(|tail| tail.chars().next());
+    let seed = match current {
+        Some(ch) if is_token_char(ch) => at,
+        Some(ch) if ch.is_whitespace() => return None,
+        Some(ch) => {
+            let next = at + ch.len_utf8();
+            line.get(next..)
+                .and_then(|tail| tail.chars().next())
+                .filter(|ch| is_token_char(*ch))
+                .map(|_| next)
+                .or_else(|| {
+                    line.get(..at)
+                        .and_then(|head| head.char_indices().next_back())
+                        .filter(|(_, ch)| is_token_char(*ch))
+                        .map(|(start, _)| start)
+                })?
+        }
+        None => line
+            .get(..at)
+            .and_then(|head| head.char_indices().next_back())
+            .filter(|(_, ch)| is_token_char(*ch))
+            .map(|(start, _)| start)?,
+    };
+
+    let mut start = seed;
+    while let Some((previous, ch)) = line
+        .get(..start)
+        .and_then(|head| head.char_indices().next_back())
+    {
+        if !is_token_char(ch) {
+            break;
+        }
+        start = previous;
+    }
+
+    let mut end = seed;
+    while let Some(ch) = line.get(end..).and_then(|tail| tail.chars().next()) {
+        if !is_token_char(ch) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    Some(start..end)
+}
+
+fn is_token_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }

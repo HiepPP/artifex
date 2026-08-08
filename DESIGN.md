@@ -442,6 +442,8 @@ of inactive sessions. Every workspace stays fully live for the run.
 - A click places the caret at the character under the pointer and focuses the
   editor. Map the point through the frame and monospace advance captured during
   paint plus the live scroll offset.
+- A double click selects the whole identifier under the pointer. Identifier
+  tokens contain letters, numbers, and underscores.
 - A drag, or `Shift` with an arrow, extends one selection. `Cmd-A` selects all.
   Paint the selected columns with the `selection` fill behind the text. Typing,
   `backspace`, or newline replaces the selection first.

@@ -933,3 +933,15 @@ fn editor_orders_selection_endpoints_low_to_high() {
     assert_eq!(ordered((2, 4), (2, 1)), ((2, 1), (2, 4)), "same row orders by byte");
     assert_eq!(ordered((1, 9), (3, 0)), ((1, 9), (3, 0)), "earlier row wins");
 }
+
+#[test]
+fn editor_double_click_range_covers_the_whole_identifier() {
+    use crate::app::editor::token_range;
+
+    let line = ".selected_tab() tiếng_42";
+    assert_eq!(token_range(line, 0), Some(1..13), "leading punctuation");
+    assert_eq!(token_range(line, 3), Some(1..13), "inside identifier");
+    assert_eq!(token_range(line, 13), Some(1..13), "boundary before punctuation");
+    assert_eq!(token_range(line, 19), Some(16..26), "Unicode identifier");
+    assert_eq!(token_range(line, 14), None, "whitespace selects nothing");
+}
