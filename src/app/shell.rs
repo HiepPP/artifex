@@ -1,12 +1,13 @@
 //! Application shell: workspace rail, three-pane split, status bar.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
 use gpui::{
-    App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
-    KeyBinding, ParentElement, Pixels, Render, SharedString, Styled as _, Window, actions, div,
-    linear_color_stop, linear_gradient, px,
+    App, AppContext as _, ClipboardItem, Context, Entity, EntityId, FocusHandle, Focusable,
+    IntoElement, KeyBinding, ParentElement, Pixels, Render, SharedString, Styled as _, Window,
+    actions, div, linear_color_stop, linear_gradient, px,
 };
 use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
@@ -107,6 +108,7 @@ pub struct Shell {
     last_session: Option<session::SessionState>,
     /// Last durable preference snapshot scheduled for an atomic write.
     last_settings: Option<settings::SettingsState>,
+    pub(crate) terminal_event_sources: HashSet<EntityId>,
 }
 
 impl Shell {
@@ -164,6 +166,7 @@ impl Shell {
             focus: cx.focus_handle(),
             last_session: None,
             last_settings: None,
+            terminal_event_sources: HashSet::new(),
         });
         shell.update(cx, |shell, cx| {
             shell.observe_watch(cx);

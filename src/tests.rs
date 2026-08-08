@@ -6,7 +6,9 @@
 use std::fs;
 
 use crate::services::{file_index, fs_tree, highlight, material_icons, search, watch};
-use crate::terminal::keys;
+use crate::terminal::{
+    TermSize, keys, resize_term_preserving_selection, search as terminal_search,
+};
 use crate::theme::{Colors, LayoutMode};
 
 fn fixture_dir() -> std::path::PathBuf {
@@ -28,6 +30,66 @@ fn fixture_dir() -> std::path::PathBuf {
     fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     fs::write(dir.join("README.md"), "# Title\n\nbody\n").unwrap();
     dir
+}
+
+#[test]
+fn terminal_search_uses_smart_case() {
+    let lines = vec![(-1, "Alpha alpha".to_string()), (0, "ALPHA".to_string())];
+    let insensitive = terminal_search::find_in_lines(&lines, "alpha");
+    assert_eq!(insensitive.len(), 3);
+    let sensitive = terminal_search::find_in_lines(&lines, "Alpha");
+    assert_eq!(sensitive.len(), 1);
+    assert_eq!(sensitive[0].line, -1);
+}
+
+#[test]
+fn terminal_plain_links_keep_exact_cell_ranges() {
+    use terminal_search::{PlainLink, plain_link_at};
+
+    let url = plain_link_at("see (https://example.com).", 8).expect("URL must be detected");
+    assert_eq!(url.start, 5);
+    assert_eq!(url.end, 24);
+    assert!(matches!(url.target, PlainLink::Url(_)));
+
+    let path = plain_link_at("error src/main.rs:12:4", 9).expect("path must be detected");
+    assert!(matches!(path.target, PlainLink::Path(_)));
+}
+
+#[test]
+fn terminal_resize_reflows_primary_screen_and_keeps_selection() {
+    use alacritty_terminal::event::{Event, EventListener};
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionType};
+    use alacritty_terminal::term::{Config, Term};
+    use alacritty_terminal::vte::ansi;
+
+    #[derive(Clone, Copy)]
+    struct Listener;
+    impl EventListener for Listener {
+        fn send_event(&self, _: Event) {}
+    }
+
+    let mut term = Term::new(Config::default(), &TermSize::for_test(8, 3), Listener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+    parser.advance(&mut term, b"abcdefghij");
+    let mut selection = Selection::new(
+        SelectionType::Simple,
+        Point::new(Line(0), Column(0)),
+        Side::Left,
+    );
+    selection.update(Point::new(Line(1), Column(1)), Side::Right);
+    term.selection = Some(selection);
+    assert_eq!(term.selection_to_string().as_deref(), Some("abcdefghij"));
+
+    resize_term_preserving_selection(&mut term, TermSize::for_test(5, 3));
+    assert_eq!(term.columns(), 5);
+    assert_eq!(term.selection_to_string().as_deref(), Some("abcdefghij"));
+
+    parser.advance(&mut term, b"\x1b[?1049h");
+    term.resize(TermSize::for_test(6, 4));
+    assert_eq!(term.columns(), 6);
+    assert_eq!(term.screen_lines(), 4);
 }
 
 #[test]
@@ -370,6 +432,22 @@ fn keys_encode_control_sequences_but_never_printable_text() {
         keys::encode(&key("up"), TermMode::APP_CURSOR),
         Some(b"\x1bOA".to_vec())
     );
+    assert_eq!(
+        keys::encode(&key("shift-up"), TermMode::empty()),
+        Some(b"\x1b[1;2A".to_vec())
+    );
+    assert_eq!(
+        keys::encode(&key("ctrl-left"), TermMode::empty()),
+        Some(b"\x1b[1;5D".to_vec())
+    );
+    assert_eq!(
+        keys::encode(&key("f1"), TermMode::empty()),
+        Some(b"\x1bOP".to_vec())
+    );
+    assert_eq!(
+        keys::encode(&key("shift-f12"), TermMode::empty()),
+        Some(b"\x1b[24;2~".to_vec())
+    );
     // Printable characters belong to the input handler, not the key path.
     assert_eq!(keys::encode(&key("a"), TermMode::empty()), None);
     assert_eq!(keys::encode(&key("cmd-s"), TermMode::empty()), None);
@@ -400,6 +478,40 @@ fn paste_payload_wraps_and_sanitizes() {
     assert_eq!(
         keys::encode(&Keystroke::parse("cmd-v").unwrap(), TermMode::empty()),
         None
+    );
+}
+
+#[test]
+fn terminal_mouse_reports_use_sgr_coordinates_and_modifiers() {
+    use alacritty_terminal::term::TermMode;
+    use gpui::Modifiers;
+
+    assert_eq!(
+        crate::terminal::mouse_report(
+            TermMode::SGR_MOUSE,
+            4,
+            2,
+            0,
+            false,
+            false,
+            Modifiers::default(),
+        ),
+        b"\x1b[<0;5;3M"
+    );
+    assert_eq!(
+        crate::terminal::mouse_report(
+            TermMode::SGR_MOUSE,
+            4,
+            2,
+            0,
+            true,
+            false,
+            Modifiers {
+                control: true,
+                ..Modifiers::default()
+            },
+        ),
+        b"\x1b[<16;5;3m"
     );
 }
 

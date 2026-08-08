@@ -10,7 +10,7 @@ baselines supplied with the brief, measured the same way (`ps -o %cpu=`).
 |---|---|---|
 | 1. Vietnamese input | **Go** | Telex composes correctly in a GPUI multi-line field. `tieengs` produced `U+0074 U+0069 U+1EBF U+006E U+0067` - pre-composed NFC, no combining marks. Tone after a multi-byte character (`viê` + `j` -> `việ`, `U+1EC7`) works. `Cmd-Z` during composition removes the in-flight run cleanly. Paste of 115 characters / 155 bytes arrives intact. Also works inside the terminal after adding a shadow document. |
 | 2. Web preview | **Go, with a limitation** | A `wry` WebView renders a local HTML page in a tab, scrolls, follows a window resize (`innerWidth` 1406 -> 856), and disappears when another tab is selected. It does **not** respect the container's rounded clip: the host card is drawn with a 24 pt radius and the web content keeps square corners. |
-| 3. Terminal | **Go, with limitations** | `zsh` runs under `alacritty_terminal`. 256-colour and true-colour output render, `ls -G` colours, arrow-key history and `less` navigation work, resize reaches the PTY (`tput cols` 67 / `lines` 16 after shrinking), and a running loop keeps ticking across a tab switch. Vietnamese composes and commits. The composition preview is not drawn at the caret, and there is no selection or copy. |
+| 3. Terminal | **Go, with limitations** | `zsh` runs under `alacritty_terminal`. 256-colour and true-colour output render, `ls -G` colours, arrow-key history and `less` navigation work, and a running loop survives a tab switch. Vietnamese composes and commits. Selection, copy, caret-local composition, modified keys, PTY replies, mouse reporting, full-scrollback search, detected links, zsh integration, command navigation, and resize reflow are implemented. Native Gate 3 verified search across 80 output rows, command navigation, and resize on the bundled app. |
 
 Gate 1 held, so the probe continued.
 
@@ -143,7 +143,7 @@ written, maintained and hardened for a real port.
 
 | Missing | Cost in this POC | Cost in a real port |
 |---|---|---|
-| Terminal | 754 lines | Much larger: selection, copy, search, links, shell integration, reflow |
+| Terminal | 1612 lines | Much larger: selection, copy, search, links, shell integration, reflow |
 | Code editor | 427 lines | Very large: `NSTextView` replacement including wrap, selection, undo, find and replace, multi-cursor |
 | Marked-text plumbing for non-text surfaces | Shadow document per surface | Every surface that accepts typing needs one |
 | Syntax highlighting integration | 200 lines | Injections, precedence, incremental re-parse on edit |

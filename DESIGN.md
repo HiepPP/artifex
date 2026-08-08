@@ -475,6 +475,30 @@ selection is off (keyboard selection still works).
 - A terminal has no document, so rebuild the text before the caret from the grid
   for the input method. Without it, Vietnamese composition never starts.
 - Preserve arrow keys, application cursor mode, and resize down to the PTY.
+- Match native macOS terminal selection: drag selects text, double-click selects
+  one semantic token, triple-click selects a line, and Option-drag selects a
+  rectangular block.
+- `Cmd-C` copies the active terminal selection. `Cmd-A` selects the complete
+  buffer. `Cmd-V` keeps bracketed-paste protection.
+- Draw marked IME text at the terminal caret. Report the same caret rectangle
+  to macOS so candidate windows follow the insertion point.
+- Encode modified navigation keys, Insert, and F1 through F12 as xterm control
+  sequences. Printable text still uses the input handler only.
+- Forward SGR and legacy mouse reports when a terminal application requests
+  them. Hold Option to force local block selection instead.
+- Honor terminal clipboard requests and PTY replies. Keyboard input clears the
+  active selection and returns the viewport to the live prompt.
+- `Cmd-F` opens a terminal-local search field. Search the complete scrollback
+  with smart case. Return and `Shift-Return` move between matches. Highlight
+  every visible match and scroll the active match into view.
+- Detect OSC 8 hyperlinks, web URLs, and existing workspace paths. Underline a
+  detected link on hover. `Cmd-click` opens web links externally and file links
+  in the owning workspace tab.
+- Load zsh shell integration without replacing user startup files. Track prompt,
+  command start, command finish, exit status, and current working directory.
+  Use that metadata for command navigation and file-link resolution.
+- Reflow soft-wrapped primary-screen lines after a column resize. Preserve hard
+  line breaks, scrollback, selection anchors, and alternate-screen dimensions.
 
 ### Markdown Preview
 
@@ -687,7 +711,7 @@ Space, even when the Artifex window is elsewhere.
 | `Cmd-Return` | Push: stage, commit, push |
 | `Cmd-B` | Reveal the active file in the Explorer |
 | `Ctrl--` / `Ctrl-=` | Navigate back / forward through opened files |
-| `Cmd-F` / `Cmd-Alt-F` | Find / find-and-replace in the active file |
+| `Cmd-F` / `Cmd-Alt-F` | Find in the active file or terminal / replace in the active file |
 | `Cmd-G` / `Cmd-Shift-G` | Next / previous find match |
 | `Cmd-Shift-C` | Insert `path:line` of the active file into the terminal |
 | `Cmd-P` | Quick Open |
@@ -717,8 +741,7 @@ Rules:
   punctuation keys, so `Ctrl-Shift--` cannot be told apart from `Ctrl--`.
 - Divergence from the parent app: the `Option-Z` shortcut is not ported. Word
   wrap is available from Quick Settings, the View menu, the editor toolbar, and
-  the Command Palette. `Cmd-F` finds in the editor here; the parent bound it to
-  the terminal.
+  the Command Palette.
 
 ## Accessibility Rules
 

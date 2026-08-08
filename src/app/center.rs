@@ -1,14 +1,13 @@
 //! Center tab strip and tab content.
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled as _, div, px,
-};
+use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled as _, div, px};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{Glyph, empty_state, file_glyph, icon_button};
 use crate::app::shell::Shell;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
+use crate::terminal::TerminalEvent;
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
 
 impl Shell {
@@ -244,6 +243,7 @@ impl Shell {
     }
 
     fn render_tab_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.observe_terminal_events(cx);
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let selected = self.workspace().selected;
@@ -344,6 +344,47 @@ impl Shell {
                         .child(element),
                 )
             })
+    }
+
+    fn observe_terminal_events(&mut self, cx: &mut Context<Self>) {
+        let sources: Vec<_> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| {
+                let root = workspace.root.clone();
+                workspace
+                    .tabs
+                    .iter()
+                    .filter_map(move |tab| match &tab.kind {
+                        TabKind::Terminal(view) => Some((root.clone(), view.clone())),
+                        _ => None,
+                    })
+            })
+            .collect();
+
+        for (root, view) in sources {
+            if !self.terminal_event_sources.insert(view.entity_id()) {
+                continue;
+            }
+            cx.subscribe(
+                &view,
+                move |this, _, event: &TerminalEvent, cx| match event {
+                    TerminalEvent::OpenPath(path) => {
+                        let Some(index) = this
+                            .workspaces
+                            .iter()
+                            .position(|workspace| workspace.root == root)
+                        else {
+                            return;
+                        };
+                        this.active = index;
+                        this.workspaces[index].open_file(path.clone(), false, cx);
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
+        }
     }
 }
 
