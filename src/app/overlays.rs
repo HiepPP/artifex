@@ -495,9 +495,7 @@ impl Shell {
                         "overlay-in",
                         Animation::new(std::time::Duration::from_millis(180))
                             .with_easing(ease_out_quint()),
-                        |panel, delta| {
-                            panel.opacity(delta).mt(px(6. * (1. - delta)))
-                        },
+                        |panel, delta| panel.opacity(delta).mt(px(6. * (1. - delta))),
                     ),
                 )
                 .into_any_element(),

@@ -409,10 +409,23 @@ pub fn change_tree(changes: &[Change]) -> Vec<ChangeTreeRow> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiffRow {
     /// A hunk header: the `@@` range plus the trailing context text.
-    Hunk { range: String, context: String },
-    Add { new: u32, text: String },
-    Del { old: u32, text: String },
-    Ctx { old: u32, new: u32, text: String },
+    Hunk {
+        range: String,
+        context: String,
+    },
+    Add {
+        new: u32,
+        text: String,
+    },
+    Del {
+        old: u32,
+        text: String,
+    },
+    Ctx {
+        old: u32,
+        new: u32,
+        text: String,
+    },
 }
 
 /// Parses `git diff` output into rows carrying real file line numbers,

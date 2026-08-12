@@ -186,8 +186,7 @@ impl Shell {
                                 MouseButton::Left,
                                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                                     if event.click_count >= 2
-                                        && let Some(tab) =
-                                            this.workspace_mut().tabs.get_mut(index)
+                                        && let Some(tab) = this.workspace_mut().tabs.get_mut(index)
                                     {
                                         tab.preview = false;
                                         cx.notify();

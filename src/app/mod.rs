@@ -2,6 +2,7 @@ pub mod center;
 pub mod chrome;
 pub mod diff;
 pub mod editor;
+pub mod global_hotkey;
 pub mod markdown;
 pub mod menu;
 pub mod overlays;

@@ -292,6 +292,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "async-channel",
+ "block2 0.6.2",
  "gix",
  "gpui",
  "gpui-component",

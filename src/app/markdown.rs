@@ -169,9 +169,13 @@ impl Render for MarkdownView {
                             list(self.list.clone(), move |index, _window, cx| {
                                 let view = view.read(cx);
                                 match view.blocks.get(index) {
-                                    Some(block) => {
-                                        render_block(index, block, &colors, view.measure.get(), zoom)
-                                    }
+                                    Some(block) => render_block(
+                                        index,
+                                        block,
+                                        &colors,
+                                        view.measure.get(),
+                                        zoom,
+                                    ),
                                     None => div().into_any_element(),
                                 }
                             })
@@ -454,9 +458,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
             let inner = card - 2.;
             let base = (inner / columns as f32).floor().max(1.);
             let last = (inner - base * (columns - 1) as f32).max(1.);
-            let width = move |index: usize| {
-                px(if index + 1 == columns { last } else { base })
-            };
+            let width = move |index: usize| px(if index + 1 == columns { last } else { base });
 
             v_flex()
                 .w(px(card))

@@ -483,6 +483,8 @@ selection is off (keyboard selection still works).
   buffer. `Cmd-V` keeps bracketed-paste protection.
 - Draw marked IME text at the terminal caret. Report the same caret rectangle
   to macOS so candidate windows follow the insertion point.
+- Draw the focused terminal caret as a thin bar that blinks every 500 ms. Never
+  recolor the glyph under it when cursor keys move the insertion point.
 - Encode modified navigation keys, Insert, and F1 through F12 as xterm control
   sequences. Printable text still uses the input handler only.
 - Forward SGR and legacy mouse reports when a terminal application requests
@@ -498,6 +500,8 @@ selection is off (keyboard selection still works).
 - Load zsh shell integration without replacing user startup files. Track prompt,
   command start, command finish, exit status, and current working directory.
   Use that metadata for command navigation and file-link resolution.
+- Remove `CLAUDE_CODE_CHILD_SESSION` and host-only `NO_COLOR` from each terminal
+  shell environment. A Claude TUI there must behave like one opened from VS Code.
 - Reflow soft-wrapped primary-screen lines after a column resize. Preserve hard
   line breaks, scrollback, selection anchors, and alternate-screen dimensions.
 

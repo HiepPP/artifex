@@ -564,7 +564,10 @@ impl Shell {
                                 .group_hover(group, |this| this.opacity(1.))
                                 .child(if staged {
                                     change_action_button(
-                                        SharedString::from(format!("unstage-{title}-{}", row.prefix)),
+                                        SharedString::from(format!(
+                                            "unstage-{title}-{}",
+                                            row.prefix
+                                        )),
                                         IconName::Minus,
                                         c.ink_secondary,
                                         c,
@@ -579,9 +582,16 @@ impl Shell {
                                     )
                                     .into_any_element()
                                 } else {
-                                    let tint = if dir_armed { c.git_deleted } else { c.ink_secondary };
+                                    let tint = if dir_armed {
+                                        c.git_deleted
+                                    } else {
+                                        c.ink_secondary
+                                    };
                                     change_action_button(
-                                        SharedString::from(format!("revert-{title}-{}", row.prefix)),
+                                        SharedString::from(format!(
+                                            "revert-{title}-{}",
+                                            row.prefix
+                                        )),
                                         IconName::Undo,
                                         tint,
                                         c,
@@ -687,14 +697,20 @@ impl Shell {
                                             // Keep the row's diff-open from also
                                             // firing for this click.
                                             cx.stop_propagation();
-                                            this.workspace_mut()
-                                                .open_file(jump_target.clone(), false, cx);
+                                            this.workspace_mut().open_file(
+                                                jump_target.clone(),
+                                                false,
+                                                cx,
+                                            );
                                             cx.notify();
                                         }),
                                     ))
                                     .when(!staged, |this| {
-                                        let tint =
-                                            if row_armed { c.git_deleted } else { c.ink_secondary };
+                                        let tint = if row_armed {
+                                            c.git_deleted
+                                        } else {
+                                            c.ink_secondary
+                                        };
                                         this.child(change_action_button(
                                             SharedString::from(format!("revert-{title}-{path}")),
                                             IconName::Undo,
@@ -713,7 +729,11 @@ impl Shell {
                                     })
                                     .child(change_action_button(
                                         SharedString::from(format!("stage-{title}-{path}")),
-                                        if staged { IconName::Minus } else { IconName::Plus },
+                                        if staged {
+                                            IconName::Minus
+                                        } else {
+                                            IconName::Plus
+                                        },
                                         c.ink_secondary,
                                         c,
                                         cx.listener(move |this, _, _, cx| {
@@ -895,14 +915,19 @@ impl Shell {
                 title: path.clone(),
                 caption: "Image diff".to_string(),
                 rows: vec![
-                    ("HEAD", if old.is_some() { "present" } else { "absent" }.to_string()),
+                    (
+                        "HEAD",
+                        if old.is_some() { "present" } else { "absent" }.to_string(),
+                    ),
                     (
                         "Working",
                         if new.is_some() { "present" } else { "absent" }.to_string(),
                     ),
                 ],
             },
-            TabKind::Diff { path, staged, text, .. } => Identity {
+            TabKind::Diff {
+                path, staged, text, ..
+            } => Identity {
                 glyph: Glyph::Mono(IconName::Replace, c.git_modified),
                 title: path.clone(),
                 caption: if *staged { "Staged diff" } else { "Diff" }.to_string(),

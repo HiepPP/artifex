@@ -11,6 +11,7 @@ pub(crate) mod search;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use alacritty_terminal::event::{Event as AlacEvent, EventListener, Notify as _, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
@@ -27,7 +28,7 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Entity, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, Hsla, IntoElement, KeyDownEvent, Modifiers, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollWheelEvent,
-    SharedString, Styled as _, Subscription, UTF16Selection, Window, canvas, div, px,
+    SharedString, Styled as _, Subscription, Task, UTF16Selection, Window, canvas, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{Sizable as _, h_flex, v_flex};
@@ -116,7 +117,17 @@ impl TerminalSession {
         install_shell_integration(&mut env)?;
 
         let pty_options = PtyOptions {
-            shell: Some(Shell::new("/bin/zsh".into(), vec!["-l".into()])),
+            shell: Some(Shell::new(
+                "/usr/bin/env".into(),
+                vec![
+                    "-u".into(),
+                    "CLAUDE_CODE_CHILD_SESSION".into(),
+                    "-u".into(),
+                    "NO_COLOR".into(),
+                    "/bin/zsh".into(),
+                    "-l".into(),
+                ],
+            )),
             working_directory: Some(cwd.clone()),
             drain_on_exit: true,
             env,
@@ -442,6 +453,9 @@ pub struct TerminalView {
     /// the PTY, so only the in-flight run lives here.
     marked: Option<String>,
     active: bool,
+    cursor_visible: bool,
+    _cursor_blink_task: Task<()>,
+    _focus_subscriptions: Vec<Subscription>,
     viewport: Option<Bounds<Pixels>>,
     selecting: bool,
     workspace_root: PathBuf,
@@ -460,6 +474,15 @@ impl TerminalView {
         let events = session.events.clone();
 
         Ok(cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let focus_subscription =
+                cx.on_focus(&focus, window, |this: &mut TerminalView, _, cx| {
+                    this.restart_cursor_blink(cx);
+                });
+            let blur_subscription = cx.on_blur(&focus, window, |this: &mut TerminalView, _, cx| {
+                this.stop_cursor_blink(cx);
+            });
+
             cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
                 while let Ok(event) = events.recv().await {
                     let keep = this
@@ -510,10 +533,13 @@ impl TerminalView {
 
             Self {
                 session,
-                focus: cx.focus_handle(),
+                focus,
                 cell,
                 marked: None,
                 active: true,
+                cursor_visible: false,
+                _cursor_blink_task: Task::ready(()),
+                _focus_subscriptions: vec![focus_subscription, blur_subscription],
                 viewport: None,
                 selecting: false,
                 workspace_root,
@@ -526,6 +552,33 @@ impl TerminalView {
 
     pub fn set_active(&mut self, active: bool) {
         self.active = active;
+    }
+
+    fn restart_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_visible = true;
+        self._cursor_blink_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        this.cursor_visible = !this.cursor_visible;
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !keep {
+                    break;
+                }
+            }
+        });
+        cx.notify();
+    }
+
+    fn stop_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_visible = false;
+        self._cursor_blink_task = Task::ready(());
+        cx.notify();
     }
 
     fn resize_to(&mut self, bounds: Bounds<Pixels>) {
@@ -551,6 +604,7 @@ impl TerminalView {
             }
             return;
         }
+        self.restart_cursor_blink(cx);
         if m.platform && !m.control && !m.alt && matches!(key, "up" | "down") {
             self.navigate_command(key == "up");
             cx.notify();
@@ -1088,14 +1142,6 @@ impl TerminalView {
                 bg = selection_bg;
             }
 
-            // Block caret: invert the cell so the glyph stays legible on the
-            // solid cursor fill. The inactive caret is a dim block drawn behind
-            // the text in `render` instead.
-            if self.active && cursor_pos == Some((row, indexed.point.column.0)) {
-                fg = palette.background;
-                bg = palette.cursor;
-            }
-
             let painted_bg = (bg != palette.background).then_some(bg);
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
@@ -1148,6 +1194,7 @@ impl Render for TerminalView {
         let entity = cx.entity();
         let focus = self.focus.clone();
         let marked = self.marked.clone();
+        let show_cursor = self.active && self.cursor_visible;
 
         div()
             .track_focus(&self.focus)
@@ -1213,24 +1260,6 @@ impl Render for TerminalView {
                         h_flex()
                             .h(cell_h)
                             .relative()
-                            // Paint the caret first so it sits behind the glyph.
-                            // Appended after the runs it overpaints the character
-                            // under the cursor and hides it.
-                            .when_some(cursor_col.filter(|_| !self.active), |this, col| {
-                                // Inactive caret only: a dim block behind the
-                                // text. The active caret inverts its cell in
-                                // `rows`, so drawing it here too would double it.
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .left(cell_w * col as f32)
-                                        .top_0()
-                                        .w(cell_w)
-                                        .h(cell_h)
-                                        .bg(palette.cursor)
-                                        .opacity(0.25),
-                                )
-                            })
                             .children(runs.into_iter().map(|run| {
                                 let mut el = div().text_color(run.fg).child(run.text);
                                 if let Some(bg) = run.bg {
@@ -1247,6 +1276,17 @@ impl Render for TerminalView {
                                 }
                                 el
                             }))
+                            .when_some(cursor_col.filter(|_| show_cursor), |this, col| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(cell_w * col as f32)
+                                        .top_0()
+                                        .w(px(2.))
+                                        .h(cell_h)
+                                        .bg(palette.cursor),
+                                )
+                            })
                     }))
                     .when_some(marked.zip(cursor), |this, (text, (row, col))| {
                         // Composition preview. The PTY sees nothing until the
@@ -1413,6 +1453,7 @@ impl EntityInputHandler for TerminalView {
         cx: &mut Context<Self>,
     ) {
         self.marked = None;
+        self.restart_cursor_blink(cx);
         if !text.is_empty() {
             self.send_input(text.as_bytes().to_vec());
         }

@@ -385,7 +385,10 @@ fn reparsing_after_an_edit_never_underflows() {
     highlighter.parse(v2);
     let starts2 = highlight::line_starts(v2);
     let spans = highlighter.spans_in(v2, 0..v2.len(), &starts2, &colors);
-    assert!(spans.values().any(|row| !row.is_empty()), "the edited buffer still highlights");
+    assert!(
+        spans.values().any(|row| !row.is_empty()),
+        "the edited buffer still highlights"
+    );
 }
 
 #[test]
@@ -935,11 +938,28 @@ fn parse_diff_numbers_lines_and_drops_metadata() {
                 range: "-3,3 +3,4".into(),
                 context: "fn main() {".into()
             },
-            DiffRow::Ctx { old: 3, new: 3, text: "ctx one".into() },
-            DiffRow::Del { old: 4, text: "removed".into() },
-            DiffRow::Add { new: 4, text: "added".into() },
-            DiffRow::Add { new: 5, text: "added two".into() },
-            DiffRow::Ctx { old: 5, new: 6, text: "ctx two".into() },
+            DiffRow::Ctx {
+                old: 3,
+                new: 3,
+                text: "ctx one".into()
+            },
+            DiffRow::Del {
+                old: 4,
+                text: "removed".into()
+            },
+            DiffRow::Add {
+                new: 4,
+                text: "added".into()
+            },
+            DiffRow::Add {
+                new: 5,
+                text: "added two".into()
+            },
+            DiffRow::Ctx {
+                old: 5,
+                new: 6,
+                text: "ctx two".into()
+            },
         ]
     );
     // Fabricated untracked diff: no header, numbering starts at one.
@@ -947,8 +967,14 @@ fn parse_diff_numbers_lines_and_drops_metadata() {
     assert_eq!(
         rows,
         vec![
-            DiffRow::Add { new: 1, text: "first".into() },
-            DiffRow::Add { new: 2, text: "second".into() },
+            DiffRow::Add {
+                new: 1,
+                text: "first".into()
+            },
+            DiffRow::Add {
+                new: 2,
+                text: "second".into()
+            },
         ]
     );
     // Limit is a hard bound.
@@ -1000,10 +1026,18 @@ fn editor_col_and_byte_convert_across_multibyte_characters() {
     // "tiếng": t(1) i(1) ế(3) n(1) g(1). Byte boundaries: 0,1,2,5,6,7.
     let line = "tiếng";
     assert_eq!(col_to_byte(line, 0), 0);
-    assert_eq!(col_to_byte(line, 2), 2, "caret after 'ti' sits before the 3-byte 'ế'");
+    assert_eq!(
+        col_to_byte(line, 2),
+        2,
+        "caret after 'ti' sits before the 3-byte 'ế'"
+    );
     assert_eq!(col_to_byte(line, 3), 5, "caret after 'ế' skips its 3 bytes");
     assert_eq!(col_to_byte(line, 5), line.len(), "end of line");
-    assert_eq!(col_to_byte(line, 99), line.len(), "past the end clamps to the end");
+    assert_eq!(
+        col_to_byte(line, 99),
+        line.len(),
+        "past the end clamps to the end"
+    );
 
     assert_eq!(byte_to_col(line, 0), 0);
     assert_eq!(byte_to_col(line, 2), 2);
@@ -1021,8 +1055,16 @@ fn editor_x_maps_to_the_nearest_column() {
     assert_eq!(x_to_col(px(14.), w, 8), 1, "1.4 rounds down");
     assert_eq!(x_to_col(px(16.), w, 8), 2, "1.6 rounds up");
     assert_eq!(x_to_col(px(-5.), w, 8), 0, "left of the text clamps to 0");
-    assert_eq!(x_to_col(px(999.), w, 8), 8, "past the last column clamps to cols");
-    assert_eq!(x_to_col(px(5.), px(0.), 8), 0, "zero width never divides by zero");
+    assert_eq!(
+        x_to_col(px(999.), w, 8),
+        8,
+        "past the last column clamps to cols"
+    );
+    assert_eq!(
+        x_to_col(px(5.), px(0.), 8),
+        0,
+        "zero width never divides by zero"
+    );
 }
 
 #[test]
@@ -1031,19 +1073,43 @@ fn editor_y_maps_to_the_row_under_the_pointer() {
     use gpui::px;
 
     let h = px(20.);
-    assert_eq!(y_to_row(px(0.), h, 5, 100), 5, "top of the first visible row");
+    assert_eq!(
+        y_to_row(px(0.), h, 5, 100),
+        5,
+        "top of the first visible row"
+    );
     assert_eq!(y_to_row(px(25.), h, 5, 100), 6, "one row down");
-    assert_eq!(y_to_row(px(-30.), h, 5, 100), 3, "above the first visible row");
-    assert_eq!(y_to_row(px(9999.), h, 5, 100), 100, "past the last row clamps to max");
-    assert_eq!(y_to_row(px(50.), px(0.), 5, 100), 5, "zero height never divides by zero");
+    assert_eq!(
+        y_to_row(px(-30.), h, 5, 100),
+        3,
+        "above the first visible row"
+    );
+    assert_eq!(
+        y_to_row(px(9999.), h, 5, 100),
+        100,
+        "past the last row clamps to max"
+    );
+    assert_eq!(
+        y_to_row(px(50.), px(0.), 5, 100),
+        5,
+        "zero height never divides by zero"
+    );
 }
 
 #[test]
 fn editor_orders_selection_endpoints_low_to_high() {
     use crate::app::editor::ordered;
 
-    assert_eq!(ordered((2, 4), (2, 1)), ((2, 1), (2, 4)), "same row orders by byte");
-    assert_eq!(ordered((1, 9), (3, 0)), ((1, 9), (3, 0)), "earlier row wins");
+    assert_eq!(
+        ordered((2, 4), (2, 1)),
+        ((2, 1), (2, 4)),
+        "same row orders by byte"
+    );
+    assert_eq!(
+        ordered((1, 9), (3, 0)),
+        ((1, 9), (3, 0)),
+        "earlier row wins"
+    );
 }
 
 #[test]
@@ -1053,7 +1119,11 @@ fn editor_double_click_range_covers_the_whole_identifier() {
     let line = ".selected_tab() tiếng_42";
     assert_eq!(token_range(line, 0), Some(1..13), "leading punctuation");
     assert_eq!(token_range(line, 3), Some(1..13), "inside identifier");
-    assert_eq!(token_range(line, 13), Some(1..13), "boundary before punctuation");
+    assert_eq!(
+        token_range(line, 13),
+        Some(1..13),
+        "boundary before punctuation"
+    );
     assert_eq!(token_range(line, 19), Some(16..26), "Unicode identifier");
     assert_eq!(token_range(line, 14), None, "whitespace selects nothing");
 }

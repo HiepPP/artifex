@@ -214,7 +214,11 @@ impl DiffView {
     }
 
     fn longest_cols(&self) -> usize {
-        self.lines.iter().map(|l| l.text.chars().count()).max().unwrap_or(0)
+        self.lines
+            .iter()
+            .map(|l| l.text.chars().count())
+            .max()
+            .unwrap_or(0)
     }
 
     /// The ordered selection range, or `None` for a collapsed caret.
@@ -228,7 +232,10 @@ impl DiffView {
     fn selected_string(&self) -> Option<String> {
         let ((sr, sb), (er, eb)) = self.selection()?;
         if sr == er {
-            return self.lines.get(sr).map(|l| l.text.get(sb..eb).unwrap_or("").to_string());
+            return self
+                .lines
+                .get(sr)
+                .map(|l| l.text.get(sb..eb).unwrap_or("").to_string());
         }
         let mut out = self.lines.get(sr)?.text.get(sb..).unwrap_or("").to_string();
         for row in (sr + 1)..er {
@@ -281,7 +288,12 @@ impl DiffView {
         (row, col_to_byte(line, col))
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (row, byte) = self.position_at(event.position);
         self.cursor_row = row;
         self.cursor_byte = byte;
@@ -443,7 +455,11 @@ impl DiffView {
                 return None;
             }
             let start = if row == sr { byte_to_col(text, sb) } else { 0 };
-            let end = if row == er { byte_to_col(text, eb) } else { line_cols + 1 };
+            let end = if row == er {
+                byte_to_col(text, eb)
+            } else {
+                line_cols + 1
+            };
             (end > start).then_some((start, end))
         });
 
@@ -495,11 +511,9 @@ impl DiffView {
                     .when_some(tint, |this, tint| this.text_color(tint))
                     .child(SharedString::from(sign)),
             )
-            .child(body.child(
-                div().text_color(text_color).child(
-                    StyledText::new(SharedString::from(text.clone())).with_highlights(highlights),
-                ),
-            ))
+            .child(body.child(div().text_color(text_color).child(
+                StyledText::new(SharedString::from(text.clone())).with_highlights(highlights),
+            )))
             .into_any_element()
     }
 }
@@ -603,8 +617,10 @@ fn compute_word_diff(lines: &mut [Line]) {
         }
         let pairs = (add_start - del_start).min(k - add_start);
         for p in 0..pairs {
-            let (old_text, new_text) =
-                (lines[del_start + p].text.clone(), lines[add_start + p].text.clone());
+            let (old_text, new_text) = (
+                lines[del_start + p].text.clone(),
+                lines[add_start + p].text.clone(),
+            );
             let (old_range, new_range) = word_diff(&old_text, &new_text);
             if let Some(r) = old_range {
                 lines[del_start + p].word.push(r);

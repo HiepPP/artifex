@@ -137,7 +137,10 @@ fn normalized(source: HashMap<String, String>) -> HashMap<String, String> {
 
 /// The dark table overlaid with the light overrides, so a light lookup falls
 /// back to the shared association when no override exists.
-fn merged(base: &HashMap<String, String>, light: Option<HashMap<String, String>>) -> HashMap<String, String> {
+fn merged(
+    base: &HashMap<String, String>,
+    light: Option<HashMap<String, String>>,
+) -> HashMap<String, String> {
     let mut out = base.clone();
     for (k, v) in normalized(light.unwrap_or_default()) {
         out.insert(k, v);
@@ -152,8 +155,16 @@ pub fn file_icon(name: &str, light: bool) -> SharedString {
         return SharedString::from(FILE_FALLBACK);
     };
     let name = name.to_lowercase();
-    let names = if light { &theme.light_file_names } else { &theme.file_names };
-    let extensions = if light { &theme.light_file_extensions } else { &theme.file_extensions };
+    let names = if light {
+        &theme.light_file_names
+    } else {
+        &theme.file_names
+    };
+    let extensions = if light {
+        &theme.light_file_extensions
+    } else {
+        &theme.file_extensions
+    };
 
     let key = names.get(&name).or_else(|| {
         // `foo.test.ts` tries `test.ts`, then `ts`.
@@ -167,14 +178,26 @@ pub fn file_icon(name: &str, light: bool) -> SharedString {
 /// name then by the appearance default.
 pub fn folder_icon(name: &str, expanded: bool, light: bool) -> SharedString {
     let Some(theme) = theme() else {
-        return SharedString::from(if expanded { FOLDER_OPEN_FALLBACK } else { FOLDER_FALLBACK });
+        return SharedString::from(if expanded {
+            FOLDER_OPEN_FALLBACK
+        } else {
+            FOLDER_FALLBACK
+        });
     };
     let name = name.to_lowercase();
     let (names, default_key, fallback) = if expanded {
-        let names = if light { &theme.light_folder_names_expanded } else { &theme.folder_names_expanded };
+        let names = if light {
+            &theme.light_folder_names_expanded
+        } else {
+            &theme.folder_names_expanded
+        };
         (names, &theme.default_folder_expanded, FOLDER_OPEN_FALLBACK)
     } else {
-        let names = if light { &theme.light_folder_names } else { &theme.folder_names };
+        let names = if light {
+            &theme.light_folder_names
+        } else {
+            &theme.folder_names
+        };
         (names, &theme.default_folder, FOLDER_FALLBACK)
     };
     resolve(theme, names.get(&name), default_key, fallback)
@@ -182,7 +205,12 @@ pub fn folder_icon(name: &str, expanded: bool, light: bool) -> SharedString {
 
 /// Maps a resolved icon key (or the appearance default) to its resource path,
 /// dropping to the static fallback when the key carries no definition.
-fn resolve(theme: &Theme, key: Option<&String>, default_key: &str, fallback: &'static str) -> SharedString {
+fn resolve(
+    theme: &Theme,
+    key: Option<&String>,
+    default_key: &str,
+    fallback: &'static str,
+) -> SharedString {
     let key = key.map(String::as_str).unwrap_or(default_key);
     theme
         .icon_paths

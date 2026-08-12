@@ -14,8 +14,8 @@ use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{icon_button, project_menu};
-use crate::app::overlays::OverlayState;
 use crate::app::editor::EditorView;
+use crate::app::overlays::OverlayState;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, Workspace, is_html_path};
 use crate::services::git;
 use crate::services::session;
@@ -429,8 +429,7 @@ impl Shell {
                         .map(|workspace| {
                             workspace.apply_scan(files, git);
                             workspace.scan.running = false;
-                            let queued =
-                                (workspace.scan.queued_index, workspace.scan.queued_git);
+                            let queued = (workspace.scan.queued_index, workspace.scan.queued_git);
                             workspace.scan.queued_index = false;
                             workspace.scan.queued_git = false;
                             queued
@@ -834,7 +833,12 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn on_toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_toggle_wrap(
+        &mut self,
+        _: &ToggleWrap,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.word_wrap = !self.word_wrap;
         settings::set_word_wrap(self.word_wrap, cx);
         for workspace in &mut self.workspaces {
@@ -1028,13 +1032,11 @@ impl Shell {
             ))
             // Atelier's rail sheen: a faint top light falling into shade, so
             // the rail reads as one lit panel instead of a flat fill.
-            .child(
-                div().absolute().inset_0().bg(linear_gradient(
-                    180.,
-                    linear_color_stop(gpui::white().opacity(0.06), 0.),
-                    linear_color_stop(gpui::black().opacity(0.08), 1.),
-                )),
-            )
+            .child(div().absolute().inset_0().bg(linear_gradient(
+                180.,
+                linear_color_stop(gpui::white().opacity(0.06), 0.),
+                linear_color_stop(gpui::black().opacity(0.08), 1.),
+            )))
             .child(
                 h_flex()
                     .h(Metrics::PANEL_HEADER)
@@ -1148,10 +1150,7 @@ impl Shell {
                                             let name = name.clone();
                                             let colors = c;
                                             let _ = dragged;
-                                            cx.new(|_| WorkspaceDragPreview {
-                                                name,
-                                                c: colors,
-                                            })
+                                            cx.new(|_| WorkspaceDragPreview { name, c: colors })
                                         },
                                     )
                                     .drag_over::<DraggedWorkspace>(move |style, _, _, _| {
@@ -1178,28 +1177,22 @@ impl Shell {
                                                     })
                                                 }),
                                         )
-                                        .item(
-                                            PopupMenuItem::new("Show in Finder").on_click(
-                                                move |_, _, _| {
-                                                    std::process::Command::new("open")
-                                                        .arg("-R")
-                                                        .arg(&path_finder)
-                                                        .spawn()
-                                                        .ok();
-                                                },
-                                            ),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("Copy Project Path").on_click(
-                                                move |_, _, cx| {
-                                                    cx.write_to_clipboard(
-                                                        ClipboardItem::new_string(
-                                                            path_copy.clone(),
-                                                        ),
-                                                    );
-                                                },
-                                            ),
-                                        )
+                                        .item(PopupMenuItem::new("Show in Finder").on_click(
+                                            move |_, _, _| {
+                                                std::process::Command::new("open")
+                                                    .arg("-R")
+                                                    .arg(&path_finder)
+                                                    .spawn()
+                                                    .ok();
+                                            },
+                                        ))
+                                        .item(PopupMenuItem::new("Copy Project Path").on_click(
+                                            move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    path_copy.clone(),
+                                                ));
+                                            },
+                                        ))
                                         .separator()
                                         .item(
                                             PopupMenuItem::new("Move Up")
@@ -1577,9 +1570,7 @@ impl Render for Shell {
                                                             .size_range(
                                                                 Metrics::CENTER_MIN..px(4000.),
                                                             )
-                                                            .child(
-                                                                self.render_center(window, cx),
-                                                            ),
+                                                            .child(self.render_center(window, cx)),
                                                     )
                                                     .child(
                                                         resizable_panel()

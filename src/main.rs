@@ -131,6 +131,7 @@ fn main() {
                 app::shell::bind_keys(cx);
                 app::menu::init(cx);
                 app::quick_settings::init(cx);
+                app::global_hotkey::init(cx);
                 root
             });
 

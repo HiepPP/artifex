@@ -399,9 +399,7 @@ impl EditorView {
             "backspace" => self.backspace(),
             "enter" => self.newline(),
             "tab" => self.insert("    "),
-            k @ ("left" | "right" | "up" | "down" | "home" | "end") => {
-                self.move_cursor(k, m.shift)
-            }
+            k @ ("left" | "right" | "up" | "down" | "home" | "end") => self.move_cursor(k, m.shift),
             _ => {
                 // Plain characters arrive through the IME path, not here, so
                 // nothing else is handled: see `replace_text_in_range`.
@@ -422,7 +420,10 @@ impl EditorView {
     fn selected_string(&self) -> Option<String> {
         let ((sr, sb), (er, eb)) = self.selection()?;
         if sr == er {
-            return self.lines.get(sr).map(|l| l.get(sb..eb).unwrap_or("").to_string());
+            return self
+                .lines
+                .get(sr)
+                .map(|l| l.get(sb..eb).unwrap_or("").to_string());
         }
         let mut out = self.lines.get(sr)?.get(sb..).unwrap_or("").to_string();
         for row in (sr + 1)..er {
@@ -450,7 +451,12 @@ impl EditorView {
                 line.replace_range(sb..eb, "");
             }
         } else {
-            let tail = self.lines.get(er).and_then(|l| l.get(eb..)).unwrap_or("").to_string();
+            let tail = self
+                .lines
+                .get(er)
+                .and_then(|l| l.get(eb..))
+                .unwrap_or("")
+                .to_string();
             if let Some(first) = self.lines.get_mut(sr) {
                 let head = first.get(..sb).unwrap_or("").to_string();
                 *first = head + &tail;
@@ -561,7 +567,12 @@ impl EditorView {
         double_click
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Wrapped rows carry their own click handler; the whole-editor mapping
         // assumes fixed-height virtualised rows, so it must not run here.
         if self.wrap {
@@ -671,7 +682,11 @@ impl EditorView {
                 return None;
             }
             let start = if row == sr { byte_to_col(&text, sb) } else { 0 };
-            let end = if row == er { byte_to_col(&text, eb) } else { line_cols + 1 };
+            let end = if row == er {
+                byte_to_col(&text, eb)
+            } else {
+                line_cols + 1
+            };
             (end > start).then_some((start, end))
         });
 
@@ -712,8 +727,7 @@ impl EditorView {
         h_flex()
             .when(wrap, |this| this.w_full())
             .when(!wrap, |this| {
-                this.flex_none()
-                    .w(GUTTER_WIDTH + char_w * line_cols as f32)
+                this.flex_none().w(GUTTER_WIDTH + char_w * line_cols as f32)
             })
             .when(is_cursor_row && sel_cols.is_none(), |this| {
                 this.bg(c.selection.opacity(0.35))
@@ -741,12 +755,9 @@ impl EditorView {
     fn render_wrapped(&self, c: Colors, entity: Entity<Self>) -> gpui::AnyElement {
         let char_w = self.char_w.get();
         let selection = self.selection();
-        let spans = self.highlighter.spans_in(
-            &self.source,
-            0..self.source.len(),
-            &self.line_starts,
-            &c,
-        );
+        let spans =
+            self.highlighter
+                .spans_in(&self.source, 0..self.source.len(), &self.line_starts, &c);
 
         let rows = (0..self.lines.len()).map(|row| {
             let handler = entity.clone();
@@ -758,7 +769,8 @@ impl EditorView {
                         let pos = event.position;
                         handler.update(cx, |this, cx| {
                             this.place_caret_wrapped(row, pos);
-                            if this.is_token_double_click(row, this.cursor_byte, event.click_count) {
+                            if this.is_token_double_click(row, this.cursor_byte, event.click_count)
+                            {
                                 this.select_token(row, this.cursor_byte);
                             }
                             window.focus(&this.focus, cx);
@@ -881,15 +893,17 @@ impl EditorView {
                                 .font_family("JetBrains Mono")
                                 .child(SharedString::from(counter)),
                         )
-                        .child(button("find-prev", "<").on_click(cx.listener(
-                            |this, _, _, cx| this.find_step(-1, cx),
-                        )))
-                        .child(button("find-next", ">").on_click(cx.listener(
-                            |this, _, _, cx| this.find_step(1, cx),
-                        )))
-                        .child(button("find-close", "x").on_click(cx.listener(
-                            |this, _, window, cx| this.close_find(window, cx),
-                        ))),
+                        .child(
+                            button("find-prev", "<")
+                                .on_click(cx.listener(|this, _, _, cx| this.find_step(-1, cx))),
+                        )
+                        .child(
+                            button("find-next", ">")
+                                .on_click(cx.listener(|this, _, _, cx| this.find_step(1, cx))),
+                        )
+                        .child(button("find-close", "x").on_click(
+                            cx.listener(|this, _, window, cx| this.close_find(window, cx)),
+                        )),
                 )
                 .when(find.show_replace, |this| {
                     this.child(
@@ -897,12 +911,12 @@ impl EditorView {
                             .gap(Space::S)
                             .items_center()
                             .child(div().w(px(200.)).child(Input::new(&find.replace).xsmall()))
-                            .child(button("replace-one", "Replace").on_click(cx.listener(
-                                |this, _, _, cx| this.replace_active(false, cx),
-                            )))
-                            .child(button("replace-all", "All").on_click(cx.listener(
-                                |this, _, _, cx| this.replace_active(true, cx),
-                            ))),
+                            .child(button("replace-one", "Replace").on_click(
+                                cx.listener(|this, _, _, cx| this.replace_active(false, cx)),
+                            ))
+                            .child(button("replace-all", "All").on_click(
+                                cx.listener(|this, _, _, cx| this.replace_active(true, cx)),
+                            )),
                     )
                 })
                 .into_any_element(),
@@ -1127,7 +1141,10 @@ impl EntityInputHandler for EditorView {
 
 /// Byte offset of the `col`-th character in `line`, clamped to the line end.
 pub(crate) fn col_to_byte(line: &str, col: usize) -> usize {
-    line.char_indices().nth(col).map(|(b, _)| b).unwrap_or(line.len())
+    line.char_indices()
+        .nth(col)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len())
 }
 
 /// Character index of byte offset `byte` within `line`.

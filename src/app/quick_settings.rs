@@ -168,9 +168,7 @@ mod macos {
             controls
                 .ui_zoom_out
                 .setEnabled(ui_zoom > 0.8 + f32::EPSILON);
-            controls
-                .ui_zoom_in
-                .setEnabled(ui_zoom < 1.4 - f32::EPSILON);
+            controls.ui_zoom_in.setEnabled(ui_zoom < 1.4 - f32::EPSILON);
             controls
                 .focus_mode
                 .setState(control_state(snapshot.focus_mode));

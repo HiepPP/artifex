@@ -40,7 +40,9 @@ pub enum TabKind {
         preview_view: Option<PreviewKind>,
     },
     /// An image opens as a pure preview; there is nothing to edit.
-    Image { path: PathBuf },
+    Image {
+        path: PathBuf,
+    },
     /// A video plays in a native webview (WKWebView owns the player UI).
     /// The view is created lazily by the shell, like an HTML preview.
     Video {
@@ -111,9 +113,9 @@ impl Tab {
 
     pub fn file_path(&self) -> Option<&Path> {
         match &self.kind {
-            TabKind::File { path, .. }
-            | TabKind::Image { path }
-            | TabKind::Video { path, .. } => Some(path.as_path()),
+            TabKind::File { path, .. } | TabKind::Image { path } | TabKind::Video { path, .. } => {
+                Some(path.as_path())
+            }
             _ => None,
         }
     }
@@ -276,7 +278,9 @@ impl Workspace {
     /// Steps through the file history. `1` is forward, `-1` is back. A file
     /// deleted since it was recorded is dropped and the step continues.
     pub fn navigate(&mut self, step: isize, cx: &mut App) {
-        let current = self.selected_tab().and_then(|tab| tab.file_path().map(Path::to_path_buf));
+        let current = self
+            .selected_tab()
+            .and_then(|tab| tab.file_path().map(Path::to_path_buf));
         loop {
             let (from, to) = if step < 0 {
                 (&mut self.forward, &mut self.back)
@@ -392,7 +396,9 @@ impl Workspace {
         // DESIGN.md > Git: an image change compares HEAD against the working
         // tree side by side instead of a text diff.
         if is_image_path(Path::new(&path)) {
-            let old = (!untracked).then(|| git::show_head_copy(&self.root, &path)).flatten();
+            let old = (!untracked)
+                .then(|| git::show_head_copy(&self.root, &path))
+                .flatten();
             let working = self.root.join(&path);
             let new = working.is_file().then_some(working);
             let title = format!(

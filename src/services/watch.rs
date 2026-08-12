@@ -83,10 +83,12 @@ impl Root {
 
     /// What `relative` is worth inside this root, or `None` to drop it.
     fn effect(&self, relative: &Path, structural: bool) -> Option<Effect> {
-        let mut names = relative.components().filter_map(|component| match component {
-            Component::Normal(name) => name.to_str(),
-            _ => None,
-        });
+        let mut names = relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => name.to_str(),
+                _ => None,
+            });
         let first = names.next()?;
 
         if first == ".git" {
@@ -235,7 +237,10 @@ impl WatchHub {
         if self.watcher.watch(root, RecursiveMode::Recursive).is_err() {
             return false;
         }
-        self.registry.lock().roots.push(Root::new(root.to_path_buf()));
+        self.registry
+            .lock()
+            .roots
+            .push(Root::new(root.to_path_buf()));
         true
     }
 }
