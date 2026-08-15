@@ -1260,6 +1260,19 @@ impl Render for TerminalView {
                         h_flex()
                             .h(cell_h)
                             .relative()
+                            // Paint the caret behind the glyph. Painting it
+                            // last hides part of each character as it blinks.
+                            .when_some(cursor_col.filter(|_| show_cursor), |this, col| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(cell_w * col as f32)
+                                        .top_0()
+                                        .w(px(2.))
+                                        .h(cell_h)
+                                        .bg(palette.cursor),
+                                )
+                            })
                             .children(runs.into_iter().map(|run| {
                                 let mut el = div().text_color(run.fg).child(run.text);
                                 if let Some(bg) = run.bg {
@@ -1276,17 +1289,6 @@ impl Render for TerminalView {
                                 }
                                 el
                             }))
-                            .when_some(cursor_col.filter(|_| show_cursor), |this, col| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .left(cell_w * col as f32)
-                                        .top_0()
-                                        .w(px(2.))
-                                        .h(cell_h)
-                                        .bg(palette.cursor),
-                                )
-                            })
                     }))
                     .when_some(marked.zip(cursor), |this, (text, (row, col))| {
                         // Composition preview. The PTY sees nothing until the
