@@ -1555,16 +1555,16 @@ impl Render for Shell {
                                             .child(
                                                 h_resizable("workspace-split")
                                                     .with_state(&self.split)
-                                                    .child(
+                                                    .when(show_sidebar, |split| split.child(
                                                         resizable_panel()
+                                                            .flex_none()
                                                             .size(Metrics::SIDEBAR_IDEAL)
                                                             .size_range(
                                                                 Metrics::SIDEBAR_MIN
                                                                     ..Metrics::SIDEBAR_MAX,
                                                             )
-                                                            .visible(show_sidebar)
                                                             .child(self.render_sidebar(cx)),
-                                                    )
+                                                    ))
                                                     .child(
                                                         resizable_panel()
                                                             .size_range(
@@ -1572,16 +1572,16 @@ impl Render for Shell {
                                                             )
                                                             .child(self.render_center(window, cx)),
                                                     )
-                                                    .child(
+                                                    .when(show_inspector, |split| split.child(
                                                         resizable_panel()
+                                                            .flex_none()
                                                             .size(Metrics::INSPECTOR_IDEAL)
                                                             .size_range(
                                                                 Metrics::INSPECTOR_MIN
                                                                     ..Metrics::INSPECTOR_MAX,
                                                             )
-                                                            .visible(show_inspector)
                                                             .child(self.render_inspector(cx)),
-                                                    ),
+                                                    )),
                                             ),
                                     )
                                     .child(self.render_status_bar(cx))
