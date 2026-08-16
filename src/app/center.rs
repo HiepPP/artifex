@@ -1,13 +1,11 @@
 //! Center tab strip and tab content.
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, Context, IntoElement, MouseButton, ParentElement, SharedString, Styled as _, div,
-    px,
-};
+use gpui::{AnyElement, Context, IntoElement, MouseButton, ParentElement, SharedString, div, px};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{Glyph, empty_state, file_glyph, icon_button};
+use crate::app::chrome::{Glyph, QuietTooltip as _, empty_state, file_glyph, icon_button};
+use crate::app::markdown::{ActiveHeadingChanged, MarkdownView};
 use crate::app::shell::Shell;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
 use crate::terminal::TerminalEvent;
@@ -20,6 +18,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         self.ensure_web_preview(window, cx);
+        self.observe_markdown_events(cx);
         v_flex()
             .size_full()
             .child(self.render_tab_strip(cx))
@@ -34,6 +33,26 @@ impl Shell {
         let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let selected = self.workspace().selected;
+        let workspace_name = self.workspace().name.clone();
+        let selected_location = self.workspace().selected_tab().map_or_else(
+            || "overview".to_string(),
+            |tab| {
+                if let Some(path) = tab.file_path() {
+                    let relative = path.strip_prefix(&self.workspace().root).unwrap_or(path);
+                    relative
+                        .parent()
+                        .filter(|parent| !parent.as_os_str().is_empty())
+                        .map_or_else(
+                            || "repository root".to_string(),
+                            |parent| parent.to_string_lossy().to_string(),
+                        )
+                } else if tab.is_terminal() {
+                    "terminal".to_string()
+                } else {
+                    "working tree".to_string()
+                }
+            },
+        );
         let previewable = match self.workspace().selected_tab().map(|tab| &tab.kind) {
             Some(TabKind::File {
                 path, preview_view, ..
@@ -103,156 +122,240 @@ impl Shell {
             })
             .collect();
 
-        h_flex()
-            .h(Metrics::TAB_BAR)
+        v_flex()
             .w_full()
             .flex_none()
-            .items_center()
-            .px(Space::XS)
-            .bg(crate::app::chrome::chrome_gradient(c))
-            .border_b_1()
-            .border_color(c.border)
             .child(
                 h_flex()
-                    .id("tab-scroller")
-                    .flex_1()
-                    .overflow_x_scroll()
-                    .gap(px(2.))
-                    .children(tabs.into_iter().map(|tab| {
-                        let index = tab.index;
-                        let is_selected = index == selected;
-                        h_flex()
-                            .id(("tab", index))
-                            .cursor_pointer()
-                            .group(SharedString::from(format!("tab-{index}")))
-                            .h(Metrics::ROW)
-                            .min_w(px(112.))
-                            .max_w(px(220.))
-                            .items_center()
-                            .gap(Space::XS)
-                            .px(Space::S)
-                            .rounded(Radius::ROW)
-                            // Same pill as the sidebar header: one glass fill
-                            // and a top-lit hairline, never a card.
-                            .when(is_selected, |this| {
-                                this.bg(c.chrome_selection)
-                                    .text_color(c.chrome_selection_ink)
-                                    .border_t_1()
-                                    .border_color(gpui::white().opacity(0.5))
-                                    .shadow(crate::app::chrome::shadow_soft())
-                            })
-                            .when(!is_selected, |this| {
-                                this.text_color(c.ink_secondary)
-                                    .border_t_1()
-                                    .border_color(gpui::transparent_black())
-                                    .hover(|this| this.bg(c.hover))
-                                    .active(|this| this.bg(c.pressed))
-                            })
-                            // The slot exists only on a closable tab, so the
-                            // last terminal does not carry an empty gutter.
-                            .when(tab.closable, |this| {
-                                this.child(
-                                    div()
-                                        .id(("close", index))
-                                        .w(px(14.))
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor_pointer()
-                                        .child(Icon::new(IconName::Close).xsmall().text_color(
-                                            if is_selected {
-                                                c.chrome_selection_ink
-                                            } else {
-                                                c.ink_secondary
-                                            },
-                                        ))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.workspace_mut().close_tab(index);
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .child(tab.glyph.render(false))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(Type::LABEL * ui_zoom)
-                                    .when(tab.preview, |this| this.italic().opacity(0.72))
-                                    .child(SharedString::from(tab.title)),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                                    if event.click_count >= 2
-                                        && let Some(tab) = this.workspace_mut().tabs.get_mut(index)
-                                    {
-                                        tab.preview = false;
-                                        cx.notify();
-                                    }
-                                }),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.workspace_mut().selected = index;
-                                cx.notify();
-                            }))
-                    })),
-            )
-            // DESIGN.md keeps editor actions in one trailing group after the
-            // scroller, with New Terminal always the far-right action.
-            .child(
-                h_flex()
+                    .h(Metrics::READER_LOCATOR)
+                    .w_full()
                     .flex_none()
                     .items_center()
                     .gap(Space::XS)
+                    .px(Space::M)
+                    .bg(c.editor)
+                    .border_b_1()
+                    .border_color(c.border)
+                    .text_size(Type::CAPTION * ui_zoom)
+                    .text_color(c.ink_secondary)
+                    .child(Icon::new(IconName::Folder).xsmall())
+                    .child(
+                        div()
+                            .max_w(px(180.))
+                            .truncate()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(c.ink)
+                            .child(SharedString::from(workspace_name)),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronRight)
+                            .xsmall()
+                            .text_color(c.ink_secondary.opacity(0.72)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .font_family("JetBrains Mono")
+                            .text_size(Type::MICRO * ui_zoom)
+                            .child(SharedString::from(selected_location)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .h(Metrics::TAB_BAR)
+                    .w_full()
+                    .items_center()
                     .px(Space::XS)
-                    .when(previewable, |this| {
-                        this.child(icon_button(
-                            "toggle-preview",
-                            if in_preview {
-                                IconName::BookOpen
-                            } else {
-                                IconName::Eye
-                            },
-                            in_preview,
-                            c,
-                            cx.listener(|this, _, _, cx| {
-                                this.workspace_mut().toggle_mode();
-                                cx.notify();
-                            }),
-                        ))
-                    })
-                    .when_some(wrap_state, |this, wrapped| {
-                        this.child(icon_button(
-                            "toggle-wrap",
-                            IconName::Menu,
-                            wrapped,
-                            c,
-                            cx.listener(|this, _, window, cx| {
-                                this.on_toggle_wrap(&crate::app::shell::ToggleWrap, window, cx)
-                            }),
-                        ))
-                    })
-                    .child(icon_button(
-                        "search-all",
-                        IconName::Search,
-                        false,
-                        c,
-                        cx.listener(|this, _, window, cx| {
-                            this.on_search_all(&crate::app::shell::SearchAllFiles, window, cx)
-                        }),
-                    ))
-                    .child(icon_button(
-                        "new-terminal",
-                        IconName::Plus,
-                        false,
-                        c,
-                        cx.listener(|this, _, window, cx| {
-                            this.workspace_mut().open_terminal(window, cx);
-                            cx.notify();
-                        }),
-                    )),
+                    .gap(Space::XS)
+                    .bg(crate::app::chrome::chrome_gradient(c))
+                    .border_b_1()
+                    .border_color(c.border)
+                    .child(
+                        h_flex()
+                            .id("tab-scroller")
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_x_scroll()
+                            .gap(px(2.))
+                            .children(tabs.into_iter().map(|tab| {
+                                let index = tab.index;
+                                let is_selected = index == selected;
+                                let group = SharedString::from(format!("tab-{index}"));
+                                h_flex()
+                                    .id(("tab", index))
+                                    .cursor_pointer()
+                                    .group(group.clone())
+                                    .h(Metrics::ROW)
+                                    .min_w(px(112.))
+                                    .max_w(px(220.))
+                                    .items_center()
+                                    .gap(Space::XS)
+                                    .px(Space::S)
+                                    .rounded(Radius::ROW)
+                                    .when(is_selected, |this| {
+                                        this.bg(c.chrome_selection)
+                                            .text_color(c.chrome_selection_ink)
+                                            .shadow(crate::app::chrome::shadow_soft())
+                                    })
+                                    .when(!is_selected, |this| {
+                                        this.text_color(c.ink_secondary)
+                                            .hover(|this| this.bg(c.hover))
+                                            .active(|this| this.bg(c.pressed))
+                                    })
+                                    .when(tab.closable, |this| {
+                                        this.child(
+                                            div()
+                                                .id(("close", index))
+                                                .w(px(14.))
+                                                .flex_none()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor_pointer()
+                                                .when(!is_selected, |this| this.opacity(0.))
+                                                .group_hover(group.clone(), |this| this.opacity(1.))
+                                                .child(
+                                                    Icon::new(IconName::Close).xsmall().text_color(
+                                                        if is_selected {
+                                                            c.chrome_selection_ink
+                                                        } else {
+                                                            c.ink_secondary
+                                                        },
+                                                    ),
+                                                )
+                                                .tooltip_text("Close tab")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.workspace_mut().close_tab(index);
+                                                    cx.notify();
+                                                })),
+                                        )
+                                    })
+                                    .child(tab.glyph.render(false))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .truncate()
+                                            .text_size(Type::LABEL * ui_zoom)
+                                            .when(tab.preview, |this| this.italic().opacity(0.72))
+                                            .child(SharedString::from(tab.title)),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                                if event.click_count >= 2
+                                                    && let Some(tab) =
+                                                        this.workspace_mut().tabs.get_mut(index)
+                                                {
+                                                    tab.preview = false;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.workspace_mut().selected = index;
+                                        cx.notify();
+                                    }))
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(Space::XS)
+                            .when(previewable, |this| {
+                                this.child(
+                                    h_flex()
+                                        .items_center()
+                                        .rounded(Radius::CONTROL)
+                                        .border_1()
+                                        .border_color(c.border)
+                                        .child(
+                                            h_flex()
+                                                .id("mode-preview")
+                                                .cursor_pointer()
+                                                .h(Metrics::CONTROL)
+                                                .items_center()
+                                                .gap(Space::XS)
+                                                .px(Space::S)
+                                                .rounded_l(Radius::CONTROL)
+                                                .when(in_preview, |this| {
+                                                    this.bg(c.selection).text_color(c.accent)
+                                                })
+                                                .hover(|this| this.bg(c.hover))
+                                                .child(Icon::new(IconName::Eye).xsmall())
+                                                .child("Preview")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if !in_preview {
+                                                        this.workspace_mut().toggle_mode();
+                                                        cx.notify();
+                                                    }
+                                                })),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .id("mode-raw")
+                                                .cursor_pointer()
+                                                .h(Metrics::CONTROL)
+                                                .items_center()
+                                                .px(Space::S)
+                                                .rounded_r(Radius::CONTROL)
+                                                .when(!in_preview, |this| {
+                                                    this.bg(c.selection).text_color(c.accent)
+                                                })
+                                                .hover(|this| this.bg(c.hover))
+                                                .child("Raw")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if in_preview {
+                                                        this.workspace_mut().toggle_mode();
+                                                        cx.notify();
+                                                    }
+                                                })),
+                                        ),
+                                )
+                            })
+                            .when_some(wrap_state, |this, wrapped| {
+                                this.child(icon_button(
+                                    "toggle-wrap",
+                                    IconName::Menu,
+                                    wrapped,
+                                    c,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.on_toggle_wrap(
+                                            &crate::app::shell::ToggleWrap,
+                                            window,
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                            })
+                            .child(icon_button(
+                                "search-all",
+                                IconName::Search,
+                                false,
+                                c,
+                                cx.listener(|this, _, window, cx| {
+                                    this.on_search_all(
+                                        &crate::app::shell::SearchAllFiles,
+                                        window,
+                                        cx,
+                                    )
+                                }),
+                            ))
+                            .child(icon_button(
+                                "new-terminal",
+                                IconName::Plus,
+                                false,
+                                c,
+                                cx.listener(|this, _, window, cx| {
+                                    this.workspace_mut().open_terminal(window, cx);
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
             )
     }
 
@@ -397,6 +500,33 @@ impl Shell {
                     }
                 },
             )
+            .detach();
+        }
+    }
+
+    fn observe_markdown_events(&mut self, cx: &mut Context<Self>) {
+        let sources: Vec<gpui::Entity<MarkdownView>> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| {
+                workspace.tabs.iter().filter_map(|tab| match &tab.kind {
+                    TabKind::File {
+                        preview_view: Some(PreviewKind::Markdown(preview)),
+                        ..
+                    } => Some(preview.clone()),
+                    _ => None,
+                })
+            })
+            .collect();
+
+        for preview in sources {
+            if !self.markdown_event_sources.insert(preview.entity_id()) {
+                continue;
+            }
+            cx.subscribe(&preview, |_, _, event: &ActiveHeadingChanged, cx| {
+                let _ = event.block;
+                cx.notify();
+            })
             .detach();
         }
     }

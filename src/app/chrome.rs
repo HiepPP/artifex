@@ -9,7 +9,7 @@ use gpui::{
     AnyElement, App, ClickEvent, ElementId, Hsla, IntoElement, MouseButton, SharedString, Window,
     WindowControlArea, div, img, px,
 };
-use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_component::{Icon, IconName, Sizable as _, h_flex, tooltip::Tooltip, v_flex};
 
 use gpui::{Background, BoxShadow, linear_color_stop, linear_gradient, point};
 
@@ -79,6 +79,8 @@ pub fn icon_button(
     c: Colors,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let id = id.into();
+    let label = icon_button_label(&id);
     div()
         .id(id)
         .cursor_pointer()
@@ -96,7 +98,75 @@ pub fn icon_button(
         } else {
             c.ink_secondary
         }))
+        .tooltip_text(label)
         .on_click(on_click)
+}
+
+/// An icon-only control for the graphite global toolbar.
+///
+/// The public shape mirrors [`icon_button`], while the ink and interaction
+/// fills stay on the rail palette so the control remains readable in both
+/// appearances.
+pub fn toolbar_icon_button(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    selected: bool,
+    c: Colors,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = id.into();
+    let label = icon_button_label(&id);
+    div()
+        .id(id)
+        .cursor_pointer()
+        .size(px(30.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(Radius::ROW)
+        .when(selected, |this| this.bg(c.rail_selection))
+        .hover(|this| this.bg(c.rail_hover))
+        .active(|this| this.bg(c.rail_pressed))
+        .child(Icon::new(icon).small().text_color(c.rail_foreground))
+        .tooltip_text(label)
+        .on_click(on_click)
+}
+
+fn icon_button_label(id: &ElementId) -> &'static str {
+    match id.to_string().as_str() {
+        "toggle-sidebar" => "Toggle navigator",
+        "toggle-appearance" => "Toggle appearance",
+        "toggle-changes" => "Show changes",
+        "focus-mode" => "Toggle focus mode",
+        "toggle-inspector" => "Toggle context rail",
+        "refresh-tree" => "Refresh files",
+        "stage-all" => "Stage all changes",
+        "refresh-git" => "Refresh changes",
+        "toggle-wrap" => "Toggle word wrap",
+        "search-all" => "Search all files",
+        "new-terminal" => "New terminal",
+        _ => "Action",
+    }
+}
+
+/// High-contrast count used by every non-zero badge on the graphite rail.
+pub fn rail_count_badge(count: usize, c: Colors, ui_zoom: f32) -> impl IntoElement {
+    div()
+        .flex_none()
+        .min_w(px(18.))
+        .h(px(18.))
+        .px(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(c.accent)
+        .font_family("JetBrains Mono")
+        .text_size(Type::MICRO * ui_zoom)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(c.accent_ink)
+        .child(SharedString::from(count.to_string()))
 }
 
 /// Monospaced count with a semantic tint. `DESIGN.md` > AtelierCountBadge.
@@ -287,10 +357,11 @@ pub fn project_menu(name: &str, path: &str, c: Colors, ui_zoom: f32) -> impl Int
         .tooltip_text(path)
 }
 
-/// Adds a plain text tooltip without pulling in the component tooltip stack.
-trait QuietTooltip: Sized {
-    fn tooltip_text(self, _text: &str) -> Self {
-        self
+/// Adds one shared text tooltip to lightweight interactive chrome.
+pub trait QuietTooltip: Sized + gpui::StatefulInteractiveElement {
+    fn tooltip_text(self, text: impl Into<SharedString>) -> Self {
+        let text = text.into();
+        self.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
     }
 }
-impl<T> QuietTooltip for T {}
+impl<T> QuietTooltip for T where T: gpui::StatefulInteractiveElement {}

@@ -5,14 +5,17 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui::{App, AppContext as _, Entity, Window};
+use gpui::{App, AppContext as _, Entity, Subscription, Window};
+use ignore::WalkBuilder;
 
 use crate::app::diff::DiffView;
 use crate::app::editor::EditorView;
 use crate::app::markdown::MarkdownView;
 use crate::services::file_index::{self, IndexedFile};
-use crate::services::fs_tree::FileTree;
+use crate::services::fs_tree::{FileTree, HARD_IGNORES, TCC_PROTECTED};
 use crate::services::git::{self, GitSnapshot};
 use crate::terminal::TerminalView;
 use gpui_component::input::InputState;
@@ -133,6 +136,73 @@ pub struct ScanState {
     pub queued_git: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExplorerInventoryEntry {
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+pub struct ExplorerInventoryRequest {
+    pub root: PathBuf,
+    pub generation: u64,
+    cancel: Arc<AtomicBool>,
+}
+
+impl ExplorerInventoryRequest {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
+pub fn build_explorer_inventory(request: &ExplorerInventoryRequest) -> Vec<ExplorerInventoryEntry> {
+    let root_is_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|home| std::fs::canonicalize(home).ok())
+        .is_some_and(|home| std::fs::canonicalize(&request.root).ok() == Some(home));
+    let cancel = request.cancel.clone();
+    let walker = WalkBuilder::new(&request.root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .follow_links(false)
+        .filter_entry(move |entry| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let Some(name) = entry.file_name().to_str() else {
+                return true;
+            };
+            if HARD_IGNORES.contains(&name) {
+                return false;
+            }
+            !(root_is_home && entry.depth() == 1 && TCC_PROTECTED.contains(&name))
+        })
+        .build();
+
+    let mut entries = Vec::new();
+    for entry in walker.flatten() {
+        if request.cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if entry.depth() == 0 {
+            continue;
+        }
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.into_path();
+        entries.push(ExplorerInventoryEntry {
+            path,
+            is_dir: file_type.is_dir(),
+        });
+    }
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries
+}
+
 pub struct Workspace {
     pub root: PathBuf,
     pub name: String,
@@ -151,6 +221,15 @@ pub struct Workspace {
     /// The commit subject. `DESIGN.md` keeps the composer multiline and focused
     /// on direct text entry, with no extra chrome inside the card.
     pub commit_input: Entity<InputState>,
+    /// Explorer filtering stays local to its workspace, just like tree
+    /// expansion. Clearing it reveals the untouched lazy tree again.
+    pub explorer_filter: Entity<InputState>,
+    pub explorer_filter_subscription: Option<Subscription>,
+    pub explorer_inventory: Vec<ExplorerInventoryEntry>,
+    explorer_inventory_generation: u64,
+    explorer_inventory_dirty: bool,
+    explorer_inventory_running: bool,
+    explorer_inventory_cancel: Arc<AtomicBool>,
     pub pushing: bool,
     pub scan: ScanState,
     /// File navigation history. `back` holds files left behind, `forward`
@@ -179,6 +258,8 @@ impl Workspace {
                 .soft_wrap(true)
                 .placeholder("Commit subject")
         });
+        let explorer_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter files..."));
         let mut workspace = Self {
             tree: FileTree::new(root.clone()),
             git: GitSnapshot::default(),
@@ -188,6 +269,13 @@ impl Workspace {
             tabs: Vec::new(),
             selected: 0,
             commit_input,
+            explorer_filter,
+            explorer_filter_subscription: None,
+            explorer_inventory: Vec::new(),
+            explorer_inventory_generation: 0,
+            explorer_inventory_dirty: true,
+            explorer_inventory_running: false,
+            explorer_inventory_cancel: Arc::new(AtomicBool::new(false)),
             pushing: false,
             scan: ScanState::default(),
             back: Vec::new(),
@@ -221,6 +309,7 @@ impl Workspace {
 
     pub fn reindex(&mut self) {
         self.set_index(file_index::build(&self.root));
+        self.invalidate_explorer_inventory();
     }
 
     /// Applies a scan built off the main thread. Each half is absent when the
@@ -232,7 +321,44 @@ impl Workspace {
         }
         if let Some(files) = files {
             self.set_index(files);
+            self.invalidate_explorer_inventory();
         }
+    }
+
+    pub fn take_explorer_inventory_request(&mut self) -> Option<ExplorerInventoryRequest> {
+        if !self.explorer_inventory_dirty || self.explorer_inventory_running {
+            return None;
+        }
+        self.explorer_inventory_generation = self.explorer_inventory_generation.wrapping_add(1);
+        self.explorer_inventory_dirty = false;
+        self.explorer_inventory_running = true;
+        self.explorer_inventory_cancel = Arc::new(AtomicBool::new(false));
+        Some(ExplorerInventoryRequest {
+            root: self.root.clone(),
+            generation: self.explorer_inventory_generation,
+            cancel: self.explorer_inventory_cancel.clone(),
+        })
+    }
+
+    pub fn apply_explorer_inventory(
+        &mut self,
+        generation: u64,
+        inventory: Vec<ExplorerInventoryEntry>,
+    ) -> bool {
+        if generation != self.explorer_inventory_generation {
+            return false;
+        }
+        self.explorer_inventory_running = false;
+        self.explorer_inventory = inventory;
+        true
+    }
+
+    fn invalidate_explorer_inventory(&mut self) {
+        self.explorer_inventory_cancel
+            .store(true, Ordering::Relaxed);
+        self.explorer_inventory_generation = self.explorer_inventory_generation.wrapping_add(1);
+        self.explorer_inventory_dirty = true;
+        self.explorer_inventory_running = false;
     }
 
     fn set_index(&mut self, files: Vec<IndexedFile>) {
@@ -507,5 +633,12 @@ impl Workspace {
                 cx.notify();
             });
         }
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        self.explorer_inventory_cancel
+            .store(true, Ordering::Relaxed);
     }
 }

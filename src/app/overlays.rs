@@ -2,25 +2,24 @@
 
 use std::path::PathBuf;
 
-use gpui::Focusable as _;
-use gpui::prelude::*;
-use gpui::{
-    Animation, AnimationExt as _, AnyElement, Context, Entity, IntoElement, ParentElement,
-    SharedString, Styled as _, Subscription, Window, div, ease_out_quint, px,
-};
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{h_flex, v_flex};
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher};
-
 use crate::app::chrome::file_glyph;
 use crate::app::shell::{
     AddWorkspace, CancelOverlay, CommandPalette, NewTerminal, QuickOpen, SaveFile, SearchAllFiles,
-    Shell, ToggleAppearance, ToggleInspector, TogglePreview, ToggleSidebar, ToggleSidebarTab,
-    ToggleWrap,
+    Shell, SidebarTab, ToggleAppearance, ToggleInspector, TogglePreview, ToggleSidebar,
+    ToggleSidebarTab, ToggleWrap,
 };
+use crate::services::repository_search::{self, RepositoryResult};
 use crate::services::search::{self, Batch, Cancel};
 use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
+use gpui::Focusable as _;
+use gpui::prelude::*;
+use gpui::{
+    Animation, AnimationExt as _, AnyElement, Context, Entity, IntoElement, KeyDownEvent,
+    ParentElement, ScrollHandle, SharedString, Styled as _, Subscription, Window, div,
+    ease_out_quint, px,
+};
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
@@ -94,11 +93,12 @@ pub struct OverlayState {
     pub kind: Option<Overlay>,
     pub query: Option<Entity<InputState>>,
     pub selected: usize,
-    pub quick: Vec<(String, PathBuf)>,
+    pub quick: Vec<RepositoryResult>,
     pub commands: Vec<Command>,
     pub batches: Vec<Batch>,
     pub total: usize,
     pub searching: bool,
+    scroll: ScrollHandle,
     /// Bumped per search. A batch from an older generation is dropped, because
     /// cancellation only takes effect between files and the worker can still
     /// deliver one more batch after the query changed.
@@ -107,10 +107,29 @@ pub struct OverlayState {
     _sub: Option<Subscription>,
 }
 
+impl OverlayState {
+    pub(crate) fn invalidate_search_results(&mut self) -> u64 {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+        self.batches.clear();
+        self.total = 0;
+        self.selected = 0;
+        self.searching = false;
+        self.generation = self.generation.wrapping_add(1);
+        self.scroll.scroll_to_item(0);
+        self.generation
+    }
+}
+
 impl Shell {
     fn open_overlay(&mut self, kind: Overlay, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(cancel) = self.overlay.cancel.take() {
+            cancel.cancel();
+        }
+        let generation = self.overlay.generation.wrapping_add(1);
         let placeholder = match kind {
-            Overlay::QuickOpen => "Go to file by path",
+            Overlay::QuickOpen => "Search files, symbols, commits...",
             Overlay::Palette => "Run a command",
             Overlay::Search => "Search all files",
         };
@@ -139,7 +158,8 @@ impl Shell {
             batches: Vec::new(),
             total: 0,
             searching: false,
-            generation: 0,
+            scroll: ScrollHandle::new(),
+            generation,
             cancel: None,
             _sub: Some(sub),
         };
@@ -203,7 +223,11 @@ impl Shell {
         if let Some(cancel) = self.overlay.cancel.take() {
             cancel.cancel();
         }
-        self.overlay = OverlayState::default();
+        let generation = self.overlay.generation.wrapping_add(1);
+        self.overlay = OverlayState {
+            generation,
+            ..OverlayState::default()
+        };
         window.focus(&self.focus_handle(cx), cx);
         cx.notify();
     }
@@ -211,36 +235,8 @@ impl Shell {
     fn refresh_overlay(&mut self, query: String, cx: &mut Context<Self>) {
         match self.overlay.kind {
             Some(Overlay::QuickOpen) => {
-                let files = &self.workspace().index;
-                let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-                let results: Vec<(String, PathBuf)> = if query.is_empty() {
-                    files
-                        .iter()
-                        .take(60)
-                        .map(|f| (f.relative.clone(), f.absolute.clone()))
-                        .collect()
-                } else {
-                    let pattern =
-                        Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
-                    let mut scored: Vec<(u32, &crate::services::file_index::IndexedFile)> = files
-                        .iter()
-                        .filter_map(|f| {
-                            let mut buf = Vec::new();
-                            let haystack = nucleo_matcher::Utf32Str::new(&f.relative, &mut buf);
-                            pattern
-                                .score(haystack, &mut matcher)
-                                .map(|score| (score, f))
-                        })
-                        .collect();
-                    scored.sort_by(|a, b| b.0.cmp(&a.0));
-                    scored
-                        .into_iter()
-                        .take(60)
-                        .map(|(_, f)| (f.relative.clone(), f.absolute.clone()))
-                        .collect()
-                };
-                self.overlay.quick = results;
-                self.overlay.selected = 0;
+                self.overlay.scroll.scroll_to_item(0);
+                self.start_quick_search(query, cx);
             }
             Some(Overlay::Palette) => {
                 let lowered = query.to_lowercase();
@@ -251,15 +247,11 @@ impl Shell {
                     })
                     .collect();
                 self.overlay.selected = 0;
+                self.overlay.scroll.scroll_to_item(0);
             }
             Some(Overlay::Search) => {
-                if let Some(cancel) = self.overlay.cancel.take() {
-                    cancel.cancel();
-                }
-                self.overlay.batches.clear();
-                self.overlay.total = 0;
+                self.overlay.invalidate_search_results();
                 if query.len() < 2 {
-                    self.overlay.searching = false;
                     cx.notify();
                     return;
                 }
@@ -267,6 +259,71 @@ impl Shell {
             }
             None => {}
         }
+        cx.notify();
+    }
+
+    fn start_quick_search(&mut self, query: String, cx: &mut Context<Self>) {
+        if let Some(cancel) = self.overlay.cancel.take() {
+            cancel.cancel();
+        }
+        let files = self.workspace().index.clone();
+        let commits = self.workspace().git.commits.clone();
+        let cancel = Cancel::new();
+        self.overlay.cancel = Some(cancel.clone());
+        self.overlay.quick.clear();
+        self.overlay.total = 0;
+        self.overlay.selected = 0;
+        self.overlay.searching = true;
+        self.overlay.generation += 1;
+        let generation = self.overlay.generation;
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let results = cx
+                .background_spawn(async move {
+                    repository_search::run(&files, &commits, &query, cancel)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.overlay.kind != Some(Overlay::QuickOpen)
+                    || this.overlay.generation != generation
+                {
+                    return;
+                }
+                this.overlay.total = results.len();
+                this.overlay.quick = results;
+                this.overlay.selected = 0;
+                this.overlay.searching = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn move_overlay_selection(&mut self, step: isize, cx: &mut Context<Self>) {
+        let count = match self.overlay.kind {
+            Some(Overlay::QuickOpen) => self.overlay.quick.len(),
+            Some(Overlay::Palette) => self.overlay.commands.len(),
+            Some(Overlay::Search) => self
+                .overlay
+                .batches
+                .iter()
+                .map(|batch| batch.hits.len())
+                .sum(),
+            None => 0,
+        };
+        if count == 0 {
+            self.overlay.selected = 0;
+            return;
+        }
+        self.overlay.selected =
+            (self.overlay.selected as isize + step).rem_euclid(count as isize) as usize;
+        let scroll_item = match self.overlay.kind {
+            Some(Overlay::Search) => {
+                search_scroll_item(&self.overlay.batches, self.overlay.selected)
+            }
+            _ => self.overlay.selected,
+        };
+        self.overlay.scroll.scroll_to_item(scroll_item);
         cx.notify();
     }
 
@@ -319,9 +376,28 @@ impl Shell {
         let selected = self.overlay.selected;
         match self.overlay.kind {
             Some(Overlay::QuickOpen) => {
-                if let Some((_, path)) = self.overlay.quick.get(selected).cloned() {
-                    self.workspace_mut().open_file(path, false, cx);
-                    self.close_overlay(window, cx);
+                if let Some(result) = self.overlay.quick.get(selected).cloned() {
+                    match result {
+                        RepositoryResult::File { absolute, .. } => {
+                            self.open_quick_source(absolute, None, cx);
+                            self.close_overlay(window, cx);
+                        }
+                        RepositoryResult::Symbol { absolute, line, .. } => {
+                            self.open_quick_source(absolute, Some(line), cx);
+                            self.close_overlay(window, cx);
+                        }
+                        RepositoryResult::Commit {
+                            short_hash,
+                            subject,
+                            ..
+                        } => {
+                            self.sidebar_tab = SidebarTab::Git;
+                            self.shows_sidebar = true;
+                            self.focus_mode = false;
+                            self.set_status(format!("commit {short_hash} - {subject}"));
+                            self.close_overlay(window, cx);
+                        }
+                    }
                 }
             }
             Some(Overlay::Palette) => {
@@ -354,6 +430,27 @@ impl Shell {
             None => {}
         }
         cx.notify();
+    }
+
+    fn open_quick_source(&mut self, path: PathBuf, line: Option<usize>, cx: &mut Context<Self>) {
+        self.workspace_mut().open_file(path, false, cx);
+        let selected = self.workspace().selected;
+        let editor =
+            self.workspace_mut()
+                .tabs
+                .get_mut(selected)
+                .and_then(|tab| match &mut tab.kind {
+                    crate::app::workspace::TabKind::File { editor, mode, .. } => {
+                        *mode = crate::app::workspace::FileMode::Source;
+                        Some(editor.clone())
+                    }
+                    _ => None,
+                });
+        if let (Some(editor), Some(line)) = (editor, line) {
+            editor.update(cx, |editor, _| {
+                editor.reveal_line(line.saturating_sub(1));
+            });
+        }
     }
 
     fn run_command(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
@@ -409,6 +506,9 @@ impl Shell {
                     ""
                 }
             ),
+            Overlay::QuickOpen if self.overlay.searching => {
+                "Searching files, symbols, and commits...".to_string()
+            }
             _ => "Up / Down / Return / click outside to close".to_string(),
         };
 
@@ -421,6 +521,19 @@ impl Shell {
                 // holds focus.
                 .id("overlay-scrim")
                 .key_context("AtelierOverlay")
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    match event.keystroke.key.as_str() {
+                        "up" => {
+                            this.move_overlay_selection(-1, cx);
+                            cx.stop_propagation();
+                        }
+                        "down" => {
+                            this.move_overlay_selection(1, cx);
+                            cx.stop_propagation();
+                        }
+                        _ => {}
+                    }
+                }))
                 // DESIGN.md: the scrim dismisses on click. It is also the only
                 // reliable way out on macOS, because the input method eats a
                 // plain Escape before GPUI ever sees it. See FEASIBILITY.md.
@@ -472,6 +585,7 @@ impl Shell {
                                 .id("overlay-body")
                                 .flex_1()
                                 .overflow_y_scroll()
+                                .track_scroll(&self.overlay.scroll)
                                 .child(body),
                         )
                         .child(
@@ -507,22 +621,63 @@ impl Shell {
         let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let selected = self.overlay.selected;
-        let rows: Vec<(usize, String, String)> = self
-            .overlay
-            .quick
-            .iter()
-            .enumerate()
-            .map(|(index, (relative, path))| {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                (index, name, relative.clone())
-            })
-            .collect();
+        let rows = self.overlay.quick.clone();
 
-        v_flex().children(rows.into_iter().map(|(index, name, relative)| {
-            let glyph = file_glyph(&name, light);
+        v_flex().children(rows.into_iter().enumerate().map(|(index, result)| {
+            let (glyph, title, detail, kind, tint): (
+                AnyElement,
+                String,
+                String,
+                &'static str,
+                gpui::Hsla,
+            ) = match result {
+                RepositoryResult::File { relative, absolute } => {
+                    let name = absolute
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    (
+                        file_glyph(&name, light).render(false),
+                        name,
+                        relative,
+                        "File",
+                        c.ink_secondary,
+                    )
+                }
+                RepositoryResult::Symbol {
+                    name,
+                    declaration,
+                    relative,
+                    absolute,
+                    line,
+                } => {
+                    let file_name = absolute
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    (
+                        file_glyph(&file_name, light).render(false),
+                        name,
+                        format!("{declaration} - {relative}:{line}"),
+                        "Symbol",
+                        c.accent,
+                    )
+                }
+                RepositoryResult::Commit {
+                    short_hash,
+                    subject,
+                    author,
+                } => (
+                    Icon::new(IconName::Network)
+                        .small()
+                        .text_color(c.git_modified)
+                        .into_any_element(),
+                    subject,
+                    format!("{short_hash} - {author}"),
+                    "Commit",
+                    c.git_modified,
+                ),
+            };
             h_flex()
                 .id(("quick", index))
                 .cursor_pointer()
@@ -532,7 +687,7 @@ impl Shell {
                 .py(Space::XS)
                 .when(index == selected, |this| this.bg(c.selection))
                 .hover(|this| this.bg(c.hover))
-                .child(glyph.render(false))
+                .child(glyph)
                 .child(
                     v_flex()
                         .flex_1()
@@ -541,7 +696,7 @@ impl Shell {
                             div()
                                 .truncate()
                                 .text_size(Type::BODY * ui_zoom)
-                                .child(SharedString::from(name)),
+                                .child(SharedString::from(title)),
                         )
                         .child(
                             div()
@@ -549,8 +704,16 @@ impl Shell {
                                 .font_family("JetBrains Mono")
                                 .text_size(Type::MICRO * ui_zoom)
                                 .text_color(c.ink_secondary)
-                                .child(SharedString::from(relative)),
+                                .child(SharedString::from(detail)),
                         ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family("JetBrains Mono")
+                        .text_size(Type::MICRO * ui_zoom)
+                        .text_color(tint)
+                        .child(kind),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.overlay.selected = index;
@@ -597,10 +760,12 @@ impl Shell {
     fn render_search_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
+        let selected = self.overlay.selected;
         let mut flat = 0usize;
         let batches = self.overlay.batches.clone();
 
-        v_flex().children(batches.into_iter().map(|batch| {
+        let mut children = Vec::new();
+        for batch in batches {
             let header = h_flex()
                 .h(Metrics::ROW)
                 .items_center()
@@ -619,19 +784,19 @@ impl Shell {
                         .text_color(c.ink_secondary)
                         .child(SharedString::from(batch.hits.len().to_string())),
                 );
+            children.push(header.into_any_element());
 
-            let rows: Vec<_> = batch
-                .hits
-                .into_iter()
-                .map(|hit| {
-                    let index = flat;
-                    flat += 1;
+            for hit in batch.hits {
+                let index = flat;
+                flat += 1;
+                children.push(
                     h_flex()
                         .id(("hit", index))
                         .cursor_pointer()
                         .px(Space::M)
                         .py(px(2.))
                         .gap(Space::S)
+                        .when(index == selected, |this| this.bg(c.selection))
                         .hover(|this| this.bg(c.hover))
                         .child(
                             div()
@@ -655,10 +820,24 @@ impl Shell {
                             this.overlay.selected = index;
                             this.activate_overlay(window, cx);
                         }))
-                })
-                .collect();
+                        .into_any_element(),
+                );
+            }
+        }
 
-            v_flex().child(header).children(rows)
-        }))
+        v_flex().children(children)
     }
+}
+
+fn search_scroll_item(batches: &[Batch], selected: usize) -> usize {
+    let mut remaining = selected;
+    let mut headers = 0;
+    for batch in batches {
+        headers += 1;
+        if remaining < batch.hits.len() {
+            break;
+        }
+        remaining = remaining.saturating_sub(batch.hits.len());
+    }
+    selected.saturating_add(headers)
 }

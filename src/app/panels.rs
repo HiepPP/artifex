@@ -1,6 +1,8 @@
 //! Sidebar (Explorer and Git) and the inspector placeholder.
 
-use std::path::PathBuf;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::prelude::*;
@@ -8,11 +10,13 @@ use gpui::{
     App, ClickEvent, Context, Hsla, IntoElement, ParentElement, SharedString, Styled as _, Window,
     div, px, uniform_list,
 };
-use gpui_component::input::Input;
+use gpui_component::input::{Input, InputEvent};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{Glyph, file_glyph, folder_glyph, icon_button, pill_tab};
+use crate::app::chrome::{file_glyph, folder_glyph, icon_button};
 use crate::app::shell::{Shell, SidebarTab};
+use crate::app::workspace::{ExplorerInventoryEntry, Workspace, build_explorer_inventory};
+use crate::services::fs_tree::Row;
 use crate::services::git::{self, ChangeKind};
 use crate::theme::{ActiveTokens as _, Colors, Metrics, Radius, Space, Type};
 
@@ -40,12 +44,198 @@ fn change_action_button(
         .on_click(on_click)
 }
 
+#[derive(Clone)]
+struct ExplorerRow {
+    path: PathBuf,
+    name: String,
+    depth: usize,
+    is_dir: bool,
+    expanded: bool,
+}
+
+impl From<&Row> for ExplorerRow {
+    fn from(row: &Row) -> Self {
+        Self {
+            path: row.entry.path.clone(),
+            name: row.entry.name.clone(),
+            depth: row.depth,
+            is_dir: row.entry.is_dir,
+            expanded: row.expanded,
+        }
+    }
+}
+
+/// Builds a filtered tree without mutating the lazy Explorer. Every matched
+/// file brings its ancestor folders, while an empty query returns the exact
+/// expanded state that existed before filtering.
+fn explorer_rows(workspace: &Workspace, query: &str) -> Vec<ExplorerRow> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return workspace.tree.rows.iter().map(ExplorerRow::from).collect();
+    }
+
+    filtered_inventory_rows(
+        &workspace.root,
+        &workspace.explorer_inventory,
+        &workspace.tree.rows,
+        &query,
+    )
+}
+
+fn filtered_inventory_rows(
+    root: &Path,
+    inventory: &[ExplorerInventoryEntry],
+    visible_rows: &[Row],
+    query: &str,
+) -> Vec<ExplorerRow> {
+    let mut paths: HashMap<PathBuf, (bool, bool)> = HashMap::new();
+    let mut add_path = |path: &Path, is_dir: bool, expanded: bool| {
+        paths
+            .entry(path.to_path_buf())
+            .and_modify(|value| {
+                value.0 |= is_dir;
+                value.1 |= expanded;
+            })
+            .or_insert((is_dir, expanded));
+    };
+
+    for entry in inventory.iter().filter(|entry| {
+        entry
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&entry.path)
+            .to_string_lossy()
+            .to_lowercase()
+            .contains(query)
+    }) {
+        let mut ancestors = Vec::new();
+        let mut current = entry.path.parent();
+        while let Some(dir) = current {
+            if dir == root {
+                break;
+            }
+            if !dir.starts_with(root) {
+                break;
+            }
+            ancestors.push(dir.to_path_buf());
+            current = dir.parent();
+        }
+        for ancestor in ancestors.iter().rev() {
+            add_path(ancestor, true, true);
+        }
+        add_path(&entry.path, entry.is_dir, entry.is_dir);
+    }
+
+    // Keep the current lazy rows responsive until the background inventory
+    // lands. The complete inventory remains separate from the text index.
+    for row in visible_rows {
+        let relative = row
+            .entry
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&row.entry.path)
+            .to_string_lossy()
+            .to_lowercase();
+        if !relative.contains(&query) {
+            continue;
+        }
+        let mut current = row.entry.path.parent();
+        while let Some(dir) = current {
+            if dir == root || !dir.starts_with(root) {
+                break;
+            }
+            add_path(dir, true, true);
+            current = dir.parent();
+        }
+        add_path(&row.entry.path, row.entry.is_dir, row.expanded);
+    }
+
+    let directories: HashSet<PathBuf> = paths
+        .iter()
+        .filter_map(|(path, (is_dir, _))| is_dir.then_some(path.clone()))
+        .collect();
+    let mut rows: Vec<_> = paths
+        .into_iter()
+        .map(|(path, (is_dir, expanded))| {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            let depth = relative.components().count().saturating_sub(1);
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            ExplorerRow {
+                path,
+                name,
+                depth,
+                is_dir,
+                expanded,
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| compare_explorer_paths(&a.path, &b.path, root, &directories));
+    rows
+}
+
+fn compare_explorer_paths(
+    left: &Path,
+    right: &Path,
+    root: &Path,
+    directories: &HashSet<PathBuf>,
+) -> Ordering {
+    let left_parts: Vec<_> = left
+        .strip_prefix(root)
+        .unwrap_or(left)
+        .components()
+        .collect();
+    let right_parts: Vec<_> = right
+        .strip_prefix(root)
+        .unwrap_or(right)
+        .components()
+        .collect();
+    let shared = left_parts
+        .iter()
+        .zip(&right_parts)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if shared == left_parts.len() || shared == right_parts.len() {
+        return left_parts.len().cmp(&right_parts.len());
+    }
+
+    let mut left_child = root.to_path_buf();
+    let mut right_child = root.to_path_buf();
+    for part in left_parts.iter().take(shared + 1) {
+        left_child.push(part.as_os_str());
+    }
+    for part in right_parts.iter().take(shared + 1) {
+        right_child.push(part.as_os_str());
+    }
+    match (
+        directories.contains(&left_child),
+        directories.contains(&right_child),
+    ) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => {
+            let left_name = left_parts[shared].as_os_str().to_string_lossy();
+            let right_name = right_parts[shared].as_os_str().to_string_lossy();
+            left_name
+                .to_lowercase()
+                .cmp(&right_name.to_lowercase())
+                .then_with(|| left_name.cmp(&right_name))
+        }
+    }
+}
+
 impl Shell {
     pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let tab = self.sidebar_tab;
         let changed = self.workspace().git.changed_count();
+        let (title, icon) = match tab {
+            SidebarTab::Explorer => ("Files", IconName::Folder),
+            SidebarTab::Git => ("Changes", IconName::Network),
+        };
 
         v_flex()
             .size_full()
@@ -53,44 +243,33 @@ impl Shell {
             .border_r_1()
             .border_color(c.border)
             .child(
-                // DESIGN.md keeps the sidebar header limited to the Explorer
-                // and Git tabs, with the Git change count as a trailing badge.
                 h_flex()
                     .h(Metrics::PANEL_HEADER)
                     .w_full()
                     .flex_none()
                     .items_center()
-                    .gap(Space::XS)
-                    .px(Space::XS)
+                    .gap(Space::S)
+                    .px(Space::M)
                     .bg(crate::app::chrome::chrome_gradient(c))
                     .border_b_1()
                     .border_color(c.border)
-                    .child(pill_tab(
-                        "tab-explorer",
-                        IconName::Folder,
-                        "Explorer",
-                        None,
-                        tab == SidebarTab::Explorer,
-                        c,
-                        ui_zoom,
-                        cx.listener(|this, _, _, cx| {
-                            this.sidebar_tab = SidebarTab::Explorer;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(pill_tab(
-                        "tab-git",
-                        IconName::Network,
-                        "Git",
-                        Some(changed),
-                        tab == SidebarTab::Git,
-                        c,
-                        ui_zoom,
-                        cx.listener(|this, _, _, cx| {
-                            this.sidebar_tab = SidebarTab::Git;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(Icon::new(icon).xsmall().text_color(c.ink_secondary))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(Type::HEADLINE * ui_zoom)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .when(tab == SidebarTab::Git && changed > 0, |this| {
+                        this.child(
+                            div()
+                                .font_family("JetBrains Mono")
+                                .text_size(Type::MICRO * ui_zoom)
+                                .text_color(c.git_modified)
+                                .child(SharedString::from(changed.to_string())),
+                        )
+                    }),
             )
             .child(match tab {
                 SidebarTab::Explorer => self.render_explorer(cx).into_any_element(),
@@ -102,7 +281,49 @@ impl Shell {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let entity = cx.entity();
-        let count = self.workspace().tree.rows.len();
+        if let Some(request) = self.workspace_mut().take_explorer_inventory_request() {
+            let request_root = request.root.clone();
+            let generation = request.generation;
+            cx.spawn(async move |shell, cx| {
+                let (inventory, cancelled) = cx
+                    .background_spawn(async move {
+                        let inventory = build_explorer_inventory(&request);
+                        let cancelled = request.is_cancelled();
+                        (inventory, cancelled)
+                    })
+                    .await;
+                if cancelled {
+                    return;
+                }
+                let _ = shell.update(cx, |shell, cx| {
+                    let Some(workspace) = shell
+                        .workspaces
+                        .iter_mut()
+                        .find(|workspace| workspace.root == request_root)
+                    else {
+                        return;
+                    };
+                    if workspace.apply_explorer_inventory(generation, inventory) {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        let filter = self.workspace().explorer_filter.clone();
+        if self.workspace().explorer_filter_subscription.is_none() {
+            let subscription = cx.subscribe(&filter, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+            self.workspace_mut().explorer_filter_subscription = Some(subscription);
+        }
+        let filter_value = filter.read(cx).value().to_string();
+        let filter_active = !filter_value.trim().is_empty();
+        let rows = explorer_rows(self.workspace(), &filter_value);
+        let count = rows.len();
+        let branch = self.workspace().git.branch.clone();
         let selected = self
             .workspace()
             .selected_tab()
@@ -111,35 +332,44 @@ impl Shell {
 
         v_flex()
             .flex_1()
-            // DESIGN.md puts a compact contextual toolbar directly below the
-            // tab bar and right-aligns its actions.
             .child(
                 h_flex()
-                    .h(Metrics::SECTION_HEADER)
+                    .h(px(44.))
                     .w_full()
                     .flex_none()
                     .items_center()
-                    .justify_end()
-                    .px(Space::XS)
-                    .gap(px(2.))
-                    .child(icon_button(
-                        "reveal-file",
-                        IconName::Frame,
-                        false,
-                        c,
-                        cx.listener(|this, _, _, cx| {
-                            let path = this
-                                .workspace()
-                                .selected_tab()
-                                .and_then(|tab| tab.file_path())
-                                .map(|p| p.to_path_buf());
-                            if let Some(path) = path {
-                                this.workspace_mut().tree.reveal(&path);
-                                this.set_status("revealed active file");
-                            }
-                            cx.notify();
-                        }),
-                    ))
+                    .px(Space::M)
+                    .gap(Space::XS)
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .items_center()
+                            .gap(Space::XS)
+                            .px(Space::XS)
+                            .font_family("JetBrains Mono")
+                            .text_size(Type::MICRO * ui_zoom)
+                            .text_color(c.ink_secondary)
+                            .child(Icon::new(IconName::Network).xsmall())
+                            .child(div().flex_1().truncate().child(SharedString::from(branch))),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .h(px(44.))
+                    .w_full()
+                    .flex_none()
+                    .items_center()
+                    .px(Space::S)
+                    .gap(Space::XS)
+                    .child(
+                        div().id("filter-files").flex_1().h(Metrics::FIELD).child(
+                            Input::new(&filter)
+                                .small()
+                                .cleanable(true)
+                                .prefix(Icon::new(IconName::Search).xsmall()),
+                        ),
+                    )
                     .child(icon_button(
                         "refresh-tree",
                         IconName::Redo,
@@ -153,103 +383,120 @@ impl Shell {
                     )),
             )
             .child(
-                uniform_list("explorer-rows", count, move |range, _window, cx| {
-                    let shell = entity.read(cx);
-                    let colors = cx.tokens().c;
-                    let light = !cx.tokens().dark;
-                    let workspace = shell.workspace();
-                    range
-                        .map(|index| {
-                            let Some(row) = workspace.tree.rows.get(index) else {
-                                return div().into_any_element();
-                            };
-                            let is_dir = row.entry.is_dir;
-                            let expanded = row.expanded;
-                            let path = row.entry.path.clone();
-                            let indent = px(8. + row.depth as f32 * 12.);
-                            let is_selected = selected.as_deref() == Some(path.as_path());
-                            let ignored = workspace.is_ignored(&path);
-                            let glyph = if is_dir {
-                                folder_glyph(&row.entry.name, expanded, light)
-                            } else {
-                                file_glyph(&row.entry.name, light)
-                            };
-                            let click_path = path.clone();
-                            h_flex()
-                                .id(("tree", index))
-                                // DESIGN.md: the whole row is the hit target and
-                                // keeps the pointing-hand cursor.
-                                .cursor_pointer()
-                                .h(Metrics::ROW)
-                                .w_full()
-                                .items_center()
-                                .pl(indent)
-                                .pr(Space::S)
-                                .rounded(Radius::ROW)
-                                .when(is_selected, |this| this.bg(colors.selection))
-                                .hover(|this| this.bg(colors.hover))
-                                // The disclosure gutter is reserved on every
-                                // row so file and folder labels share one
-                                // text indent.
-                                .child(div().w(px(14.)).flex_none().flex().items_center().when(
-                                    is_dir,
-                                    |this| {
-                                        this.child(
-                                            Icon::new(if expanded {
-                                                IconName::ChevronDown
-                                            } else {
-                                                IconName::ChevronRight
+                v_flex()
+                    .flex_1()
+                    .when(count == 0 && filter_active, |this| {
+                        this.child(
+                            div()
+                                .px(Space::L)
+                                .py(Space::M)
+                                .text_size(Type::CAPTION * ui_zoom)
+                                .text_color(c.ink_secondary)
+                                .child("No matching files"),
+                        )
+                    })
+                    .when(count > 0, |this| {
+                        this.child(
+                            uniform_list("explorer-rows", count, move |range, _window, cx| {
+                                let shell = entity.read(cx);
+                                let colors = cx.tokens().c;
+                                let light = !cx.tokens().dark;
+                                let workspace = shell.workspace();
+                                range
+                                    .map(|index| {
+                                        let Some(row) = rows.get(index) else {
+                                            return div().into_any_element();
+                                        };
+                                        let is_dir = row.is_dir;
+                                        let expanded = row.expanded;
+                                        let path = row.path.clone();
+                                        let indent = px(8. + row.depth as f32 * 12.);
+                                        let is_selected =
+                                            selected.as_deref() == Some(path.as_path());
+                                        let ignored = workspace.is_ignored(&path);
+                                        let glyph = if is_dir {
+                                            folder_glyph(&row.name, expanded, light)
+                                        } else {
+                                            file_glyph(&row.name, light)
+                                        };
+                                        let click_path = path.clone();
+                                        h_flex()
+                                            .id(("tree", index))
+                                            .cursor_pointer()
+                                            .h(Metrics::TREE_ROW)
+                                            .w_full()
+                                            .items_center()
+                                            .pl(indent)
+                                            .pr(Space::S)
+                                            .rounded(Radius::ROW)
+                                            .when(is_selected, |this| this.bg(colors.selection))
+                                            .hover(|this| this.bg(colors.hover))
+                                            .child(
+                                                div()
+                                                    .w(px(14.))
+                                                    .flex_none()
+                                                    .flex()
+                                                    .items_center()
+                                                    .when(is_dir, |this| {
+                                                        this.child(
+                                                            Icon::new(if expanded {
+                                                                IconName::ChevronDown
+                                                            } else {
+                                                                IconName::ChevronRight
+                                                            })
+                                                            .xsmall()
+                                                            .text_color(colors.ink_secondary),
+                                                        )
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(18.))
+                                                    .flex_none()
+                                                    .flex()
+                                                    .items_center()
+                                                    .child(glyph.render(false)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .truncate()
+                                                    .text_size(Type::BODY * ui_zoom)
+                                                    .text_color(colors.file_tree_foreground)
+                                                    .child(SharedString::from(row.name.clone())),
+                                            )
+                                            .when(ignored, |this| this.opacity(0.45))
+                                            .on_click({
+                                                let entity = entity.clone();
+                                                move |event: &gpui::ClickEvent, _window, cx| {
+                                                    entity.update(cx, |shell, cx| {
+                                                        if is_dir {
+                                                            if !filter_active {
+                                                                shell
+                                                                    .workspace_mut()
+                                                                    .tree
+                                                                    .toggle(&click_path);
+                                                            }
+                                                        } else {
+                                                            let preview = event.click_count() < 2;
+                                                            shell.workspace_mut().open_file(
+                                                                click_path.clone(),
+                                                                preview,
+                                                                cx,
+                                                            );
+                                                        }
+                                                        cx.notify();
+                                                    });
+                                                }
                                             })
-                                            .xsmall()
-                                            .text_color(colors.ink_secondary),
-                                        )
-                                    },
-                                ))
-                                .child(
-                                    div()
-                                        .w(px(18.))
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .child(glyph.render(false)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .truncate()
-                                        .text_size(Type::BODY * ui_zoom)
-                                        .text_color(colors.file_tree_foreground)
-                                        .child(SharedString::from(row.entry.name.clone())),
-                                )
-                                // Ignored content stays visible and quiet.
-                                .when(ignored, |this| this.opacity(0.45))
-                                .on_click({
-                                    let entity = entity.clone();
-                                    move |event: &gpui::ClickEvent, _window, cx| {
-                                        entity.update(cx, |shell, cx| {
-                                            if is_dir {
-                                                shell.workspace_mut().tree.toggle(&click_path);
-                                            } else {
-                                                // DESIGN.md > Explorer: single
-                                                // click previews, double click
-                                                // opens a permanent tab.
-                                                let preview = event.click_count() < 2;
-                                                shell.workspace_mut().open_file(
-                                                    click_path.clone(),
-                                                    preview,
-                                                    cx,
-                                                );
-                                            }
-                                            cx.notify();
-                                        });
-                                    }
-                                })
-                                .into_any_element()
-                        })
-                        .collect()
-                })
-                .flex_1()
-                .px(Space::XS),
+                                            .into_any_element()
+                                    })
+                                    .collect()
+                            })
+                            .flex_1()
+                            .px(Space::XS),
+                        )
+                    }),
             )
     }
 
@@ -810,44 +1057,49 @@ impl Shell {
         }
     }
 
-    /// The inspector pane. The Swift build hosts the Gemma sidecar here; the
-    /// POC ports no assistant, so the pane carries the identity and metadata of
-    /// the active tab instead and keeps the three-pane width rules exercised.
+    /// Reading context for the active document: outline, local links and Git
+    /// provenance. This stays read-only and never becomes an agent surface.
     pub(crate) fn render_inspector(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::app::workspace::TabKind;
+        use crate::app::workspace::{FileMode, PreviewKind, TabKind};
 
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let workspace = self.workspace();
         let root = workspace.root.clone();
+        let git_snapshot = workspace.git.clone();
+
+        let markdown_context = workspace.selected_tab().and_then(|tab| match &tab.kind {
+            TabKind::File {
+                mode: FileMode::Preview,
+                preview_view: Some(PreviewKind::Markdown(preview)),
+                ..
+            } => {
+                let view = preview.read(cx);
+                Some((preview.clone(), view.outline_items(), view.linked_files()))
+            }
+            _ => None,
+        });
 
         struct Identity {
-            glyph: Glyph,
-            title: String,
-            caption: String,
+            section: &'static str,
             rows: Vec<(&'static str, String)>,
         }
 
         let identity = workspace.selected_tab().map(|tab| match &tab.kind {
             TabKind::File { path, editor, .. } => {
                 let editor = editor.read(cx);
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
                 let relative = path
                     .strip_prefix(&root)
                     .unwrap_or(path)
                     .to_string_lossy()
                     .to_string();
                 Identity {
-                    glyph: file_glyph(&name, light),
-                    caption: format!("File - {} lines", editor.line_count()),
-                    title: name,
+                    section: "FILE",
                     rows: vec![
                         ("Path", relative),
                         ("Bytes", editor.byte_len().to_string()),
+                        ("Lines", editor.line_count().to_string()),
                         ("Language", editor.language().name().to_string()),
                         (
                             "Unsaved",
@@ -857,9 +1109,7 @@ impl Shell {
                 }
             }
             TabKind::Terminal(view) => Identity {
-                glyph: Glyph::Mono(IconName::SquareTerminal, c.ink_secondary),
-                title: view.read(cx).session.title.to_string(),
-                caption: "Terminal".to_string(),
+                section: "TERMINAL",
                 rows: vec![
                     ("Shell", "/bin/zsh -l".to_string()),
                     ("Working directory", root.to_string_lossy().to_string()),
@@ -875,10 +1125,6 @@ impl Shell {
                 ],
             },
             TabKind::Image { path } => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
                 let relative = path
                     .strip_prefix(&root)
                     .unwrap_or(path)
@@ -886,17 +1132,11 @@ impl Shell {
                     .to_string();
                 let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 Identity {
-                    glyph: Glyph::Mono(IconName::Frame, c.git_untracked),
-                    title: name,
-                    caption: "Image".to_string(),
+                    section: "FILE",
                     rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
                 }
             }
             TabKind::Video { path, .. } => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
                 let relative = path
                     .strip_prefix(&root)
                     .unwrap_or(path)
@@ -904,16 +1144,12 @@ impl Shell {
                     .to_string();
                 let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 Identity {
-                    glyph: Glyph::Mono(IconName::Eye, c.git_untracked),
-                    title: name,
-                    caption: "Video".to_string(),
+                    section: "FILE",
                     rows: vec![("Path", relative), ("Bytes", bytes.to_string())],
                 }
             }
-            TabKind::ImageDiff { path, old, new } => Identity {
-                glyph: Glyph::Mono(IconName::Replace, c.git_modified),
-                title: path.clone(),
-                caption: "Image diff".to_string(),
+            TabKind::ImageDiff { old, new, .. } => Identity {
+                section: "DIFF",
                 rows: vec![
                     (
                         "HEAD",
@@ -925,12 +1161,8 @@ impl Shell {
                     ),
                 ],
             },
-            TabKind::Diff {
-                path, staged, text, ..
-            } => Identity {
-                glyph: Glyph::Mono(IconName::Replace, c.git_modified),
-                title: path.clone(),
-                caption: if *staged { "Staged diff" } else { "Diff" }.to_string(),
+            TabKind::Diff { text, .. } => Identity {
+                section: "DIFF",
                 rows: vec![
                     (
                         "Additions",
@@ -957,86 +1189,347 @@ impl Shell {
             },
         });
 
+        let last_commit = git_snapshot.commits.first().cloned();
+        let mut authors = Vec::new();
+        for commit in &git_snapshot.commits {
+            if !authors.contains(&commit.author) {
+                authors.push(commit.author.clone());
+            }
+            if authors.len() == 3 {
+                break;
+            }
+        }
+
         v_flex()
             .size_full()
             .bg(c.sidebar)
             .border_l_1()
             .border_color(c.border)
             .child(
-                h_flex()
-                    .h(Metrics::PANEL_HEADER)
-                    .w_full()
-                    .flex_none()
-                    .items_center()
-                    .gap(Space::S)
-                    .px(Space::M)
-                    .bg(c.chrome)
-                    .border_b_1()
-                    .border_color(c.border)
-                    .child(
-                        identity
-                            .as_ref()
-                            .map(|i| i.glyph.clone())
-                            .unwrap_or(Glyph::Mono(IconName::Inspector, c.ink_secondary))
-                            .render(true),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .gap(px(1.))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(Type::LABEL * ui_zoom)
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(SharedString::from(
-                                        identity
-                                            .as_ref()
-                                            .map(|i| i.title.clone())
-                                            .unwrap_or_else(|| "Inspector".into()),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(Type::MICRO * ui_zoom)
-                                    .text_color(c.ink_secondary)
-                                    .child(SharedString::from(
-                                        identity
-                                            .as_ref()
-                                            .map(|i| i.caption.clone())
-                                            .unwrap_or_else(|| "No tab selected".into()),
-                                    )),
-                            ),
-                    ),
-            )
-            .child(
                 v_flex()
                     .id("inspector-body")
                     .flex_1()
                     .overflow_y_scroll()
-                    .p(Space::M)
-                    .gap(Space::S)
-                    .children(identity.into_iter().flat_map(|identity| identity.rows).map(
-                        |(label, value)| {
+                    .when_some(markdown_context, |this, (preview, headings, links)| {
+                        this.when(!headings.is_empty(), |this| {
+                            this.child(
+                                v_flex()
+                                    .px(Space::M)
+                                    .py(Space::M)
+                                    .gap(px(2.))
+                                    .border_b_1()
+                                    .border_color(c.border)
+                                    .child(
+                                        div()
+                                            .pb(Space::S)
+                                            .text_size(Type::MICRO * ui_zoom)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(c.ink_secondary)
+                                            .child("ON THIS PAGE"),
+                                    )
+                                    .children(headings.into_iter().enumerate().map(
+                                        |(index, (block, level, title, active))| {
+                                            let preview = preview.clone();
+                                            h_flex()
+                                                .id(("context-outline", index))
+                                                .h(px(28.))
+                                                .w_full()
+                                                .cursor_pointer()
+                                                .items_center()
+                                                .rounded(Radius::ROW)
+                                                .pl(px(level.saturating_sub(1) as f32 * 10. + 6.))
+                                                .pr(Space::XS)
+                                                .text_size(Type::CAPTION * ui_zoom)
+                                                .text_color(if active {
+                                                    c.accent
+                                                } else if level <= 2 {
+                                                    c.ink
+                                                } else {
+                                                    c.ink_secondary
+                                                })
+                                                .when(active, |this| {
+                                                    this.font_weight(gpui::FontWeight::SEMIBOLD)
+                                                })
+                                                .hover(|this| this.bg(c.raised))
+                                                .child(
+                                                    div()
+                                                        .min_w(px(0.))
+                                                        .flex_1()
+                                                        .truncate()
+                                                        .child(title),
+                                                )
+                                                .on_click(move |_, _, cx| {
+                                                    preview.update(cx, |view, cx| {
+                                                        view.scroll_to_block(block, cx);
+                                                    });
+                                                })
+                                        },
+                                    )),
+                            )
+                        })
+                        .when(!links.is_empty(), |this| {
+                            this.child(
+                                v_flex()
+                                    .px(Space::M)
+                                    .py(Space::M)
+                                    .gap(px(2.))
+                                    .border_b_1()
+                                    .border_color(c.border)
+                                    .child(
+                                        div()
+                                            .pb(Space::S)
+                                            .text_size(Type::MICRO * ui_zoom)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(c.ink_secondary)
+                                            .child("LINKED FILES"),
+                                    )
+                                    .children(links.into_iter().enumerate().map(
+                                        |(index, path)| {
+                                            let label = path
+                                                .strip_prefix(&root)
+                                                .unwrap_or(&path)
+                                                .to_string_lossy()
+                                                .to_string();
+                                            let glyph = file_glyph(&label, light);
+                                            h_flex()
+                                                .id(("context-link", index))
+                                                .h(px(30.))
+                                                .w_full()
+                                                .cursor_pointer()
+                                                .items_center()
+                                                .gap(Space::S)
+                                                .rounded(Radius::ROW)
+                                                .px(Space::XS)
+                                                .hover(|this| this.bg(c.raised))
+                                                .child(glyph.render(false))
+                                                .child(
+                                                    div()
+                                                        .min_w(px(0.))
+                                                        .flex_1()
+                                                        .truncate()
+                                                        .text_size(Type::CAPTION * ui_zoom)
+                                                        .child(SharedString::from(label)),
+                                                )
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.workspace_mut().open_file(
+                                                        path.clone(),
+                                                        false,
+                                                        cx,
+                                                    );
+                                                    cx.notify();
+                                                }))
+                                        },
+                                    )),
+                            )
+                        })
+                    })
+                    .when_some(last_commit, |this, commit| {
+                        this.child(
                             v_flex()
-                                .gap(px(2.))
+                                .px(Space::M)
+                                .py(Space::M)
+                                .gap(Space::XS)
+                                .border_b_1()
+                                .border_color(c.border)
+                                .child(
+                                    div()
+                                        .pb(Space::XS)
+                                        .text_size(Type::MICRO * ui_zoom)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(c.ink_secondary)
+                                        .child("LAST COMMIT"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(Type::CAPTION * ui_zoom)
+                                        .line_height(px(18. * ui_zoom))
+                                        .child(SharedString::from(commit.subject)),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap(Space::S)
+                                        .font_family("JetBrains Mono")
+                                        .text_size(Type::MICRO * ui_zoom)
+                                        .text_color(c.ink_secondary)
+                                        .child(SharedString::from(commit.short_hash))
+                                        .child(SharedString::from(git::relative_time(
+                                            commit.seconds,
+                                        )))
+                                        .child(SharedString::from(commit.author)),
+                                ),
+                        )
+                    })
+                    .when(!authors.is_empty(), |this| {
+                        this.child(
+                            v_flex()
+                                .px(Space::M)
+                                .py(Space::M)
+                                .gap(Space::S)
+                                .border_b_1()
+                                .border_color(c.border)
                                 .child(
                                     div()
                                         .text_size(Type::MICRO * ui_zoom)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(c.ink_secondary)
-                                        .child(label),
+                                        .child("AUTHORS"),
+                                )
+                                .children(authors.into_iter().map(|author| {
+                                    h_flex()
+                                        .items_center()
+                                        .gap(Space::S)
+                                        .child(
+                                            div()
+                                                .size(px(22.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .bg(c.raised)
+                                                .text_size(Type::MICRO * ui_zoom)
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(SharedString::from(
+                                                    author
+                                                        .chars()
+                                                        .next()
+                                                        .map_or("?".to_string(), |c| {
+                                                            c.to_uppercase().to_string()
+                                                        }),
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .min_w(px(0.))
+                                                .flex_1()
+                                                .truncate()
+                                                .text_size(Type::CAPTION * ui_zoom)
+                                                .child(SharedString::from(author)),
+                                        )
+                                })),
+                        )
+                    })
+                    .when(git_snapshot.is_repo, |this| {
+                        let changed = git_snapshot.changed_count();
+                        this.child(
+                            v_flex()
+                                .px(Space::M)
+                                .py(Space::M)
+                                .gap(Space::S)
+                                .border_b_1()
+                                .border_color(c.border)
+                                .child(
+                                    div()
+                                        .text_size(Type::MICRO * ui_zoom)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(c.ink_secondary)
+                                        .child("STATUS"),
+                                )
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap(Space::S)
+                                        .child(Icon::new(IconName::Check).xsmall().text_color(
+                                            if changed == 0 {
+                                                c.git_added
+                                            } else {
+                                                c.git_modified
+                                            },
+                                        ))
+                                        .child(div().text_size(Type::CAPTION * ui_zoom).child(
+                                            SharedString::from(if changed == 0 {
+                                                "Working tree clean".to_string()
+                                            } else {
+                                                format!("{changed} changed files")
+                                            }),
+                                        )),
                                 )
                                 .child(
                                     div()
                                         .font_family("JetBrains Mono")
-                                        .text_size(Type::CAPTION * ui_zoom)
-                                        .child(SharedString::from(value)),
+                                        .text_size(Type::MICRO * ui_zoom)
+                                        .text_color(c.ink_secondary)
+                                        .child(SharedString::from(format!(
+                                            "{}  {}",
+                                            git_snapshot.branch, git_snapshot.head_short
+                                        ))),
+                                ),
+                        )
+                    })
+                    .when_some(identity, |this, identity| {
+                        this.child(
+                            v_flex()
+                                .px(Space::M)
+                                .py(Space::M)
+                                .gap(Space::S)
+                                .child(
+                                    div()
+                                        .text_size(Type::MICRO * ui_zoom)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(c.ink_secondary)
+                                        .child(identity.section),
                                 )
-                        },
-                    )),
+                                .children(identity.rows.into_iter().map(|(label, value)| {
+                                    v_flex()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .text_size(Type::MICRO * ui_zoom)
+                                                .text_color(c.ink_secondary)
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div()
+                                                .font_family("JetBrains Mono")
+                                                .text_size(Type::CAPTION * ui_zoom)
+                                                .child(SharedString::from(value)),
+                                        )
+                                })),
+                        )
+                    }),
             )
+    }
+}
+
+#[cfg(test)]
+mod explorer_filter_tests {
+    use super::*;
+
+    #[test]
+    fn filter_finds_inventory_file_outside_the_lazy_tree() {
+        let root = PathBuf::from("/repo");
+        let inventory = vec![
+            ExplorerInventoryEntry {
+                path: root.join("ignored"),
+                is_dir: true,
+            },
+            ExplorerInventoryEntry {
+                path: root.join("ignored/huge.bin"),
+                is_dir: false,
+            },
+        ];
+
+        let rows = filtered_inventory_rows(&root, &inventory, &[], "huge");
+        let paths: Vec<_> = rows.iter().map(|row| row.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![root.join("ignored"), root.join("ignored/huge.bin")]
+        );
+        assert!(rows.first().is_some_and(|row| row.expanded));
+    }
+
+    #[test]
+    fn case_insensitive_sort_has_a_stable_tie_break() {
+        let root = PathBuf::from("/repo");
+        let directories = HashSet::new();
+        let left = root.join("README.md");
+        let right = root.join("Readme.md");
+
+        let ordering = compare_explorer_paths(&left, &right, &root, &directories);
+        assert_ne!(ordering, Ordering::Equal);
+        assert_eq!(
+            ordering,
+            compare_explorer_paths(&right, &left, &root, &directories).reverse()
+        );
     }
 }
 

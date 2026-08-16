@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Status | Current implementation baseline |
-| Updated | 2026-08-03 |
+| Updated | 2026-08-16 |
 | Platform | macOS 26+ |
 | UI stack | Rust, GPUI (Zed), gpui-component |
 | Parent contract | `atelier/DESIGN.md`, Atelier baseline `02ebe5b` |
@@ -25,7 +25,7 @@ what this build carries.
 
 | Area | State here |
 |---|---|
-| Shell, rail, split, status bar | Ported |
+| Reading Room shell, rail, split, status bar | Ported |
 | Explorer, editor, terminal, Git panel | Ported at usable depth |
 | Quick Open, Command Palette, Search All Files | Ported |
 | Markdown preview | Ported as a block tree, not one selectable document |
@@ -42,12 +42,16 @@ partial diagnostics writer to this build.
 
 ## Product Character
 
-Artifex is a native macOS workspace tool. It should feel focused, dense, calm,
-and expensive.
+Artifex is a native macOS repository reading room. It should feel focused,
+dense, calm, and expensive.
 
-- Keep the center editor as the main visual surface.
-- Use an executive-alloy hierarchy: smoked graphite navigation, titanium chrome,
-  porcelain work surfaces, and one terracotta accent.
+- Keep the selected file reader or preview as the main visual surface. Editing
+  remains available, but it must not dominate the shell.
+- Optimize the first screen for repository orientation: choose a workspace,
+  browse files, search, inspect changes, read content, and verify provenance.
+- Use an executive-alloy hierarchy: smoked graphite navigation and global
+  toolbar, titanium local chrome, porcelain work surfaces, and one terracotta
+  accent.
 - Use compact controls and clear hierarchy instead of decorative chrome.
 - Show state through fill, weight, opacity, and thin rules.
 - Keep the editor matte. Reserve glass for navigation, compact chrome, and
@@ -66,14 +70,16 @@ main
 `-- Root (gpui-component)
     `-- Shell
         |-- Title-bar drag strip
-        |-- Toolbar: sidebar toggle, project menu, appearance, focus, inspector
+        |-- Toolbar: sidebar toggle, global search, appearance, focus, context
         |-- Workspace rail
+        |   |-- Active workspace identity and branch
+        |   |-- Files, Search, Changes primary navigation
         |   |-- Workspace rows with Cmd-1 .. Cmd-9
         |   `-- Add Workspace
         |-- Three-pane split
-        |   |-- Sidebar: Explorer or Git
-        |   |-- Center: tab strip plus terminal, file, preview, or diff
-        |   `-- Inspector: file metadata
+        |   |-- Navigator: Explorer or Git changes
+        |   |-- Reader: breadcrumb, file controls, terminal, file, preview, or diff
+        |   `-- Context rail: outline, links, Git provenance, metadata
         |-- Status bar
         `-- Quick Open, Command Palette, or Search All Files overlay
 ```
@@ -107,9 +113,9 @@ centered inside the display's visible bounds, never against its full bounds.
 The workspace rail stays at the outer-left edge in every mode. Focus mode hides
 both side panels and never hides the rail.
 
-| Mode | Container width | Sidebar | Inspector |
+| Mode | Container width | Navigator | Context rail |
 |---|---:|---|---|
-| Compact | `< 900` | Hidden | Hidden |
+| Compact | `< 900` | Hidden; opens as an overlay | Hidden |
 | Standard | `900..<1280` | Visible | Hidden |
 | Wide | `>= 1280` | Visible | Visible |
 
@@ -130,34 +136,37 @@ Rules:
 
 | Surface | Minimum | Ideal | Maximum |
 |---|---:|---:|---:|
-| Workspace rail | 176 | 176 | 176 |
-| Workspace sidebar | 240 | 370 | 560 |
+| Workspace rail | 230 | 230 | 230 |
+| Workspace navigator | 288 | 288 | 420 |
 | Center | 420 | Flexible | Flexible |
-| Inspector | 260 | 360 | 640 |
+| Context rail | 280 | 300 | 420 |
 
 ### Fixed Heights
 
 | Token | Value | Use |
 |---|---:|---|
-| `PANEL_HEADER` | 40 | Panel headers and the sidebar tab strip |
-| `SECTION_HEADER` | 36 | Section headers below panel chrome |
-| `TAB_BAR` | 40 | Center tab strip |
-| `STATUS_BAR` | 26 | Bottom workspace status |
+| `TOP_CHROME` | 52 | Title-bar reserve plus global search chrome |
+| `PANEL_HEADER` | 48 | Navigator surface title |
+| `READER_LOCATOR` | 36 | Compact workspace and parent-location breadcrumb |
+| `SECTION_HEADER` | 40 | Branch and compact section headers below panel chrome |
+| `TAB_BAR` | 44 | Reader document tabs and actions |
+| `STATUS_BAR` | 28 | Bottom workspace status |
 | `FIELD` | 32 | Search and text fields |
 | `CONTROL` | 28 | Regular controls |
 | `COMPACT_CONTROL` | 24 | Inline controls |
-| `ROW` | 28 | Dense list rows, sidebar tabs, center tabs |
-| `RAIL_WIDTH` | 176 | Workspace rail |
+| `ROW` | 28 | Dense Git rows and center tabs |
+| `TREE_ROW` | 32 | Explorer file and folder rows |
+| `RAIL_WIDTH` | 230 | Workspace rail |
 | `RAIL_ITEM_HEIGHT` | 44 | Two-line workspace row |
 | `RAIL_ITEM_GAP` | 4 | Space between workspace rows |
-| `PROJECT_MENU_WIDTH` | 420 | Project command trigger |
+| `PROJECT_MENU_WIDTH` | 568 | Global search trigger |
 | `PALETTE_WIDTH` | 640 | Quick Open and Command Palette |
 | `PALETTE_HEIGHT` | 410 | Quick Open and Command Palette |
 | `PALETTE_FIELD` | 52 | Overlay query field |
 | `TITLE_BAR` | 28 | Reserve under the transparent title bar |
-| `documentMaxWidth` | 640 | Markdown prose measure |
+| `documentMaxWidth` | 720 | Markdown prose measure |
 | `documentBleedMaxWidth` | 1180 | Markdown wide-block measure |
-| `markdownOutlineWidth` | 200 | Trailing "On This Page" rail |
+| `CONTEXT_WIDTH` | 300 | Wide-layout context rail |
 
 The title-bar reserve is not a constant at use sites. Read it through
 `title_bar_inset(window)`: a full-screen window has no title bar, and reserving
@@ -171,6 +180,7 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
+| `toolbar` | `#292F37` | `#20252C` | Global Reading Room toolbar in both appearances |
 | `chrome` | `#E7E3DD` | `#23262A` | Toolbar, headers, status, tab strip |
 | `canvas` | `#DEDAD3` | `#181A1D` | Window and empty-state background |
 | `sidebar` | `#EEEBE3` | `#202328` | Explorer, Git, and inspector bases |
@@ -323,7 +333,7 @@ the sidebar header, the tab strip, and the status bar.
 | Component | Contract |
 |---|---|
 | `title_bar_drag_strip` | Full-width band of `title_bar_inset` height. Drags the window, and zooms it on double click |
-| `icon_button` | 30-point square, `Radius::ROW`, hover and pressed fills, accent-free selected fill |
+| `icon_button` | 30-point square, `Radius::ROW`, hover and pressed fills, accent-free selected fill, accessible label, and visible tooltip |
 | `count_badge` | Monospaced count on a 14% wash of its own semantic tint |
 | `pill_tab` | Header tab: icon, label, optional count. Equal share of the header, `ROW` height, glass fill and top-lit hairline when selected |
 | `empty_state` | One icon well, a serif title, and a short message |
@@ -373,18 +383,38 @@ Geometry rules:
 
 ## Surface Rules
 
+### Global Toolbar
+
+- Keep the global toolbar at 52 points with the `toolbar` graphite token in
+  light and dark appearances. Use the rail foreground tokens for its title and
+  icon controls.
+- Keep the repository search trigger light, 568 points wide, and visually
+  centred. Search text and results use the normal ink tokens.
+- The trailing action group may expose appearance, Changes, focus mode, and
+  context visibility because those actions already have real application state.
+  Do not add notification, account, or settings icons without a working surface.
+
 ### Workspace Rail
 
-- Fixed 176-point rail with a graphite-to-petrol gradient and one hairline on its
+- Fixed 230-point rail with a graphite-to-petrol gradient and one hairline on its
   trailing edge. It is the only gradient in the application.
-- Keep the `Workspaces` header, the scrollable rows, and a labelled
+- Start with the active workspace identity and branch. Follow it with full-width
+  `Files`, `Search`, and `Changes` navigation rows. The selected row uses the
+  stable rail selection fill. `Changes` carries the changed-file count.
+- `Files` selects the Explorer navigator. `Changes` selects the Git navigator.
+  `Search` opens Search All Files without changing the selected navigator.
+- Keep the `Workspaces` label, the scrollable workspace rows, and a labelled
   `Add Workspace` action at the bottom.
+- Render every workspace exactly once in stored rail order. Selecting a
+  workspace changes only the active marker and mounted content; it never removes
+  or repositions a row. The `Workspaces` count includes the active workspace.
 - Each row is 44 points with 4-point gaps: the full project name on the first
   line, its `Cmd-1` .. `Cmd-9` shortcut in smaller monospaced secondary text on
   the second. Never show initials, monograms, or paths.
 - Positions past nine stay reachable without a shortcut.
 - Show the changed-file count as a trailing high-contrast badge when it is above
   zero. Count each path once across staged, unstaged, and untracked states.
+- Show non-zero per-workspace change counts with the same badge treatment.
 - Mark the active workspace with label weight and one selection fill. No
   checkmark, no leading accent bar, no floating card.
 - `Add Workspace` opens the native folder panel. It starts at `~/Projects`,
@@ -399,16 +429,16 @@ of inactive sessions. Every workspace stays fully live for the run.
 
 - Use the `sidebar` token. Keep the content matte and slightly darker than the
   editor.
-- Explorer and Git share one slot behind a 40-point header.
-- The header holds the two tabs and nothing else. Each tab takes an equal share
-  of the header width, so two tabs read as one segmented control split down the
-  middle.
-- Render the selected tab as a `Radius::ROW` pill of `chrome_selection` glass
-  with a top-lit hairline, `chrome_selection_ink` label and icon.
-- Show the Git change count as a trailing badge that never shifts the label.
-- Keep tab geometry stable across normal, hover, pressed, selected, and
-  count-change states.
-- Explorer rows are 28 points: chevron, identity icon, label. Treat the whole
+- Explorer and Git changes share one 288-point navigator slot. The workspace
+  rail selects which surface is mounted.
+- The 48-point header shows the surface title and working actions. Explorer
+  places branch in its own 40-point row, then a dedicated filter row with the
+  refresh control. Git changes keeps its existing commit controls inside the
+  surface.
+- `Filter files...` is a real in-place filter. Typing updates visible Explorer
+  rows immediately while keeping matching ancestors visible. Clearing the
+  field restores the current expanded tree.
+- Explorer rows are 32 points: chevron, identity icon, label. Treat the whole
   row, including its trailing empty area, as one pointer-cursor hit target.
 - Render Git-ignored entries at reduced opacity, and keep them visible.
 - An Explorer single click opens one replaceable preview tab. Opening another
@@ -420,18 +450,45 @@ of inactive sessions. Every workspace stays fully live for the run.
 
 ### Center Tabs
 
-- Titanium chrome for the strip, porcelain for the surface below it.
+- Titanium chrome for the reader header, porcelain for the surface below it.
+- Use a 36-point locator row followed by a 44-point tab and action row. This
+  keeps orientation visible without spending 120 points on passive chrome.
+- The locator shows a folder glyph, the workspace, a chevron glyph, and the
+  selected file's parent location. Root files show `repository root`.
+- Keep the selected file or terminal identity in the active tab only. Never
+  repeat that title in the locator row.
+- Use icon glyphs for breadcrumb separators. Never render raw `>` punctuation
+  as interface chrome.
 - Tab widths stay between 112 and 220 points.
+- The tab scroller is the only flexible child and uses `min_w(0)`. It yields
+  space before the trailing action group, so Preview, Raw, search, and New
+  Terminal never clip at Standard or Compact widths.
 - Render the selected tab as a `ROW`-height pill of `chrome_selection` glass with
   a top-lit hairline. No accent top rule, no selection border.
 - Mark a preview tab with italic label text at `0.72` opacity. Do not add another
   icon.
 - Double click a preview tab to promote it to a permanent tab.
 - Place the close control at the leading edge of a closable tab. A tab that
-  cannot close carries no close slot at all, so it has no empty gutter.
+  cannot close carries no close slot at all, so it has no empty gutter. A close
+  click must not also select or reopen the tab.
 - Keep the final terminal tab open and non-closable.
-- Keep editor actions in one trailing group after the scroller, with New Terminal
-  always the far-right action.
+- Keep source/preview, wrap, search, and New Terminal in one trailing group.
+  Render source/preview as labelled `Preview` and `Raw` controls for a file that
+  supports both modes. New Terminal remains the far-right action.
+
+### Context Rail
+
+- Replace the generic inspector with a 300-point reading context rail in Wide
+  mode. The rail scrolls as one surface and uses sticky visual sections.
+- The context rail has no repeated file-identity header. For Markdown, its first
+  visible section is `On This Page`. Each heading scrolls the document to
+  its block. Then show local linked files that resolve inside the workspace.
+- Show Git provenance from the live snapshot: last commit, recent authors,
+  branch, short HEAD, changed state, and repository sync status when available.
+- End with compact file metadata. Never repeat information already visible in
+  the reader header.
+- In Standard mode the rail is hidden. In Compact mode both side surfaces are
+  hidden and the navigator opens as an overlay.
 
 ### Editor
 
@@ -508,12 +565,13 @@ selection is off (keyboard selection still works).
 ### Markdown Preview
 
 - Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
-- Hold prose on a 640-point measure. Let card blocks bleed to 1180: tables and
+- Hold prose on a 720-point measure. Let card blocks bleed to 1180: tables and
   fenced code cards read better wider, prose does not.
-- Show a trailing "On This Page" outline when the document has at least two
-  headings and the host is at least 900 points wide.
-- Heading ratios are H1 `1.85`, H2 `1.45`, H3 `1.18`, H4 `1.00`, H5 and H6
-  `0.92`. Draw the H1 and H2 rule as an accent lead segment followed by a
+- Publish headings and local links to the shell context rail. The Markdown view
+  owns parsing and scroll targets; the shell owns the surrounding rail.
+- Heading ratios are H1 `2.875`, H2 `1.45`, H3 `1.18`, H4 `1.00`, H5 and H6
+  `0.92`. H1 and H2 use the document serif face. H1 resolves to 46 points at
+  default zoom. Draw the H1 and H2 rule as an accent lead segment followed by a
   hairline.
 - Line-height ratios are prose `1.62`, list items `1.55`, table cells `1.45`,
   code lines `1.35`.
@@ -530,10 +588,18 @@ footnotes, and front-matter cards are not ported.
 
 - One shared floating panel: 640 points wide, 410 tall, `PALETTE_FIELD` query
   field on the `editor` fill, `raised` results, `chrome` footer.
-- `Cmd-P` opens Quick Open, `Cmd-Shift-P` the Command Palette, `Cmd-Shift-F`
-  Search All Files.
+- The global search trigger is 568 points wide and reads `Search files, symbols,
+  commits...`. Clicking it opens unified repository search.
+- `Cmd-K` and `Cmd-P` open Quick Open, `Cmd-Shift-P` the Command Palette, and
+  `Cmd-Shift-F` Search All Files.
 - Show the file name first and a monospaced relative path second.
 - Rank paths with a fuzzy matcher over the shared workspace file index.
+- Unified repository search returns typed File, Symbol, and Commit results.
+  Symbol results come from declarations in indexed text files. Commit results
+  come from the live Git snapshot. Never label a filename as a symbol.
+- Move the active result with Up and Down. Return opens the active item. File
+  and symbol results open their source file; symbol results also reveal their
+  line. Commit results open the Git navigator and identify the matching commit.
 - Search All Files streams ordered batches from a cancellable task, tags each
   batch with a generation, and rejects a batch from a superseded query.
 - Cap one search at 1,000 matching lines and skip files above 2 MB.
@@ -600,6 +666,17 @@ instead of promising a key that cannot arrive.
 
 Divergence: no branch picker, no discard, no upstream counts, and no
 commit-message generation.
+
+### Workspace Status
+
+- Keep the status bar at 28 points. The leading group shows branch, short HEAD,
+  and changed count from the live Git snapshot.
+- The trailing group identifies the active surface with real state: file type
+  or language, Preview or Raw mode when available, line-ending mode for text,
+  working-tree clean or dirty state, content token estimate, and content zoom.
+- Omit a value when the active tab cannot provide it. Never fill the status bar
+  with invented metadata.
+- A status item only uses a pointer cursor when it has a click action.
 
 ### File Previews
 
@@ -751,10 +828,14 @@ Rules:
 ## Accessibility Rules
 
 - Give every icon-only control a label.
+- Show that label in a tooltip on pointer hover. Keep the hit target keyboard
+  reachable when GPUI exposes a focus path for that surface.
 - Never convey state by color alone. Git status carries a letter, ignored files
   carry help text, and a selected tab carries a fill plus ink change.
 - Keep keyboard focus stable after an overlay closes.
 - Keep contrast stable on the rail by using its own foreground tokens.
+- Give the active outline row a fill or weight change in addition to accent
+  colour. Put a dismissible scrim behind the Compact navigator overlay.
 
 Divergence: GPUI exposes no accessibility tree on macOS in this revision, so a
 screen reader sees nothing. Reduce Motion, Reduce Transparency, and Increase

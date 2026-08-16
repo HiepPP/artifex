@@ -24,6 +24,48 @@ use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Radius, Space, Type, U
 
 const GUTTER_WIDTH: Pixels = px(56.);
 
+#[derive(Clone, Copy)]
+enum LineEnding {
+    Lf,
+    Crlf,
+    Cr,
+    Mixed,
+}
+
+impl LineEnding {
+    fn detect(source: &str) -> Self {
+        let bytes = source.as_bytes();
+        let crlf = bytes.windows(2).filter(|pair| *pair == b"\r\n").count();
+        let bare_lf = bytes
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
+            .saturating_sub(crlf);
+        let bare_cr = bytes
+            .iter()
+            .filter(|byte| **byte == b'\r')
+            .count()
+            .saturating_sub(crlf);
+        let kinds = usize::from(crlf > 0) + usize::from(bare_lf > 0) + usize::from(bare_cr > 0);
+
+        match (kinds, crlf, bare_lf, bare_cr) {
+            (0, _, _, _) | (1, 0, _, 0) => Self::Lf,
+            (1, _, 0, 0) => Self::Crlf,
+            (1, 0, 0, _) => Self::Cr,
+            _ => Self::Mixed,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Lf => "LF",
+            Self::Crlf => "CRLF",
+            Self::Cr => "CR",
+            Self::Mixed => "Mixed",
+        }
+    }
+}
+
 pub struct EditorView {
     pub path: PathBuf,
     pub dirty: bool,
@@ -32,6 +74,7 @@ pub struct EditorView {
     highlighter: Highlighter,
     line_starts: Vec<usize>,
     source: String,
+    line_ending: LineEnding,
     cursor_row: usize,
     cursor_byte: usize,
     /// Selection anchor. `Some` while a selection is active or forming; the
@@ -78,6 +121,7 @@ impl EditorView {
         highlighter.parse(&source);
         let lines = source.split('\n').map(|l| l.to_string()).collect();
         let starts = line_starts(&source);
+        let line_ending = LineEnding::detect(&source);
 
         cx.new(|cx| Self {
             path,
@@ -87,6 +131,7 @@ impl EditorView {
             highlighter,
             line_starts: starts,
             source,
+            line_ending,
             cursor_row: 0,
             cursor_byte: 0,
             anchor: None,
@@ -231,6 +276,10 @@ impl EditorView {
         self.highlighter.lang()
     }
 
+    pub fn line_ending(&self) -> &'static str {
+        self.line_ending.label()
+    }
+
     pub fn reveal_line(&mut self, line: usize) {
         self.cursor_row = line.min(self.lines.len().saturating_sub(1));
         self.cursor_byte = 0;
@@ -247,6 +296,7 @@ impl EditorView {
 
     fn reindex(&mut self) {
         self.source = self.lines.join("\n");
+        self.line_ending = LineEnding::detect(&self.source);
         self.line_starts = line_starts(&self.source);
         self.highlighter.parse(&self.source);
         self.dirty = true;

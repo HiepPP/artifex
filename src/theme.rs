@@ -54,6 +54,7 @@ macro_rules! tokens {
 }
 
 tokens! {
+    toolbar                 = (0x292F37, 0x20252C);
     chrome                  = (0xE7E3DD, 0x23262A);
     canvas                  = (0xDEDAD3, 0x181A1D);
     sidebar                 = (0xEEEBE3, 0x202328);
@@ -114,31 +115,34 @@ impl Radius {
 /// `DESIGN.md` > Fixed Heights and Panel Widths.
 pub struct Metrics;
 impl Metrics {
-    pub const PANEL_HEADER: Pixels = px(40.);
-    pub const SECTION_HEADER: Pixels = px(36.);
-    pub const TAB_BAR: Pixels = px(40.);
-    pub const STATUS_BAR: Pixels = px(26.);
+    pub const TOP_CHROME: Pixels = px(52.);
+    pub const PANEL_HEADER: Pixels = px(48.);
+    pub const READER_LOCATOR: Pixels = px(36.);
+    pub const SECTION_HEADER: Pixels = px(40.);
+    pub const TAB_BAR: Pixels = px(44.);
+    pub const STATUS_BAR: Pixels = px(28.);
     pub const FIELD: Pixels = px(32.);
     pub const CONTROL: Pixels = px(28.);
     pub const COMPACT_CONTROL: Pixels = px(24.);
     pub const ROW: Pixels = px(28.);
-    pub const RAIL_WIDTH: Pixels = px(176.);
+    pub const TREE_ROW: Pixels = px(32.);
+    pub const RAIL_WIDTH: Pixels = px(230.);
     pub const RAIL_ITEM_HEIGHT: Pixels = px(44.);
     pub const RAIL_ITEM_GAP: Pixels = px(4.);
 
-    pub const SIDEBAR_MIN: Pixels = px(240.);
-    pub const SIDEBAR_IDEAL: Pixels = px(240.);
-    pub const SIDEBAR_MAX: Pixels = px(560.);
+    pub const SIDEBAR_MIN: Pixels = px(288.);
+    pub const SIDEBAR_IDEAL: Pixels = px(288.);
+    pub const SIDEBAR_MAX: Pixels = px(420.);
     pub const CENTER_MIN: Pixels = px(420.);
-    pub const INSPECTOR_MIN: Pixels = px(260.);
-    pub const INSPECTOR_IDEAL: Pixels = px(360.);
-    pub const INSPECTOR_MAX: Pixels = px(640.);
+    pub const INSPECTOR_MIN: Pixels = px(280.);
+    pub const INSPECTOR_IDEAL: Pixels = px(300.);
+    pub const INSPECTOR_MAX: Pixels = px(420.);
 
     pub const PALETTE_WIDTH: Pixels = px(640.);
     pub const PALETTE_HEIGHT: Pixels = px(410.);
     pub const PALETTE_FIELD: Pixels = px(52.);
-    /// `DESIGN.md` > projectMenuWidth.
-    pub const PROJECT_MENU_WIDTH: Pixels = px(420.);
+    /// `DESIGN.md` > global search trigger.
+    pub const PROJECT_MENU_WIDTH: Pixels = px(568.);
     /// Height the content must clear when the window draws a transparent title
     /// bar. Matches the traffic-light origin plus the button and its bottom gap.
     /// Only correct while a title bar exists; use `title_bar_inset`.

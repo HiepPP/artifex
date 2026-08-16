@@ -4,8 +4,13 @@
 //! not need a display.
 
 use std::fs;
+use std::time::Duration;
 
-use crate::services::{file_index, fs_tree, highlight, material_icons, search, watch};
+use crate::app::overlays::OverlayState;
+use crate::app::shell::workspace_rail_rows;
+use crate::services::{
+    file_index, fs_tree, highlight, material_icons, repository_search, search, watch,
+};
 use crate::terminal::{
     TermSize, keys, resize_term_preserving_selection, search as terminal_search,
 };
@@ -177,6 +182,158 @@ fn search_respects_case_and_whole_word() {
 
     let partial = search::run(&files, "mai", false, true, search::Cancel::new(), |_| {});
     assert_eq!(partial, 0, "whole word must not match a prefix");
+}
+
+#[test]
+fn repository_search_returns_real_files_symbols_and_commits() {
+    use crate::services::git::Commit;
+    use repository_search::RepositoryResult;
+    let dir = fixture_dir();
+    fs::write(
+        dir.join("src/symbols.rs"),
+        "// PhantomWidget is only a comment\npub struct SearchWidget;\nimpl SearchWidget { fn render_widget(&self) {} }\n",
+    )
+    .unwrap();
+    let files = file_index::build(&dir);
+    let commits = vec![Commit {
+        short_hash: "abc1234".to_string(),
+        subject: "fix unified repository search".to_string(),
+        author: "Alex Chen".to_string(),
+        seconds: 0,
+    }];
+
+    let file_results =
+        repository_search::run(&files, &commits, "symbols.rs", search::Cancel::new());
+    assert!(file_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::File { relative, .. } if relative == "src/symbols.rs"
+    )));
+
+    let symbol_results =
+        repository_search::run(&files, &commits, "SearchWidget", search::Cancel::new());
+    assert!(symbol_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Symbol { name, line, .. }
+            if name == "SearchWidget" && *line == 2
+    )));
+    assert!(!symbol_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Symbol { name, .. } if name == "PhantomWidget"
+    )));
+
+    let method_results =
+        repository_search::run(&files, &commits, "render_widget", search::Cancel::new());
+    assert!(method_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Symbol { name, line, .. }
+            if name == "render_widget" && *line == 3
+    )));
+
+    let commit_results =
+        repository_search::run(&files, &commits, "unified search", search::Cancel::new());
+    assert!(commit_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Commit { short_hash, subject, .. }
+            if short_hash == "abc1234" && subject == "fix unified repository search"
+    )));
+}
+
+#[test]
+fn repository_search_honors_cancellation_and_text_size_limit() {
+    use crate::services::file_index::{IndexedFile, MAX_TEXT_BYTES};
+
+    let dir = fixture_dir();
+    let large = dir.join("src/large.rs");
+    fs::write(&large, vec![b'x'; MAX_TEXT_BYTES as usize + 1]).unwrap();
+    let files = vec![IndexedFile {
+        absolute: large,
+        relative: "src/large.rs".to_string(),
+        name: "large.rs".to_string(),
+        haystack: "src/large.rs".to_string(),
+    }];
+
+    let results = repository_search::run(&files, &[], "large", search::Cancel::new());
+    assert!(results.is_empty());
+
+    let cancel = search::Cancel::new();
+    cancel.cancel();
+    assert!(repository_search::run(&files, &[], "large", cancel).is_empty());
+}
+
+#[test]
+fn overlay_search_invalidation_resets_selection_and_advances_generation() {
+    let mut overlay = OverlayState::default();
+    overlay.selected = 9;
+    overlay.total = 20;
+    overlay.searching = true;
+
+    let first = overlay.invalidate_search_results();
+    assert_eq!(overlay.selected, 0);
+    assert_eq!(overlay.total, 0);
+    assert!(!overlay.searching);
+
+    overlay.selected = 4;
+    let second = overlay.invalidate_search_results();
+    assert_ne!(first, second);
+    assert_eq!(overlay.selected, 0);
+}
+
+#[test]
+fn repository_search_reports_swift_declaration_kinds_and_utf8_lines() {
+    use repository_search::RepositoryResult;
+
+    let dir = fixture_dir();
+    fs::write(
+        dir.join("src/models.swift"),
+        "// tiếng Việt\nstruct MôHình {}\nenum TrạngThái { case sẵnSàng }\n",
+    )
+    .unwrap();
+    let files = file_index::build(&dir);
+
+    let struct_results = repository_search::run(&files, &[], "MôHình", search::Cancel::new());
+    assert!(struct_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Symbol {
+            name,
+            declaration,
+            line,
+            ..
+        } if name == "MôHình" && declaration == "Struct" && *line == 2
+    )));
+
+    let enum_results = repository_search::run(&files, &[], "TrạngThái", search::Cancel::new());
+    assert!(enum_results.iter().any(|result| matches!(
+        result,
+        RepositoryResult::Symbol {
+            name,
+            declaration,
+            line,
+            ..
+        } if name == "TrạngThái" && declaration == "Enum" && *line == 3
+    )));
+}
+
+#[test]
+fn repository_search_cancels_a_large_declaration_walk() {
+    let dir = fixture_dir();
+    let path = dir.join("src/many_symbols.rs");
+    let mut source = String::new();
+    let mut index = 0;
+    while source.len() < file_index::MAX_TEXT_BYTES as usize - 128 {
+        source.push_str(&format!("fn searchable_symbol_{index}() {{}}\n"));
+        index += 1;
+    }
+    fs::write(path, source).unwrap();
+    let files = file_index::build(&dir);
+    let cancel = search::Cancel::new();
+    let worker_cancel = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        repository_search::run(&files, &[], "searchable_symbol", worker_cancel)
+    });
+
+    std::thread::sleep(Duration::from_millis(2));
+    cancel.cancel();
+    assert!(worker.join().unwrap().is_empty());
 }
 
 #[test]
@@ -738,6 +895,23 @@ fn terminal_size_never_collapses() {
     let size = TermSize::for_test(0, 0);
     assert!(size.columns() >= 2);
     assert!(size.screen_lines() >= 1);
+}
+
+#[test]
+fn workspace_rail_selection_keeps_stored_order() {
+    let workspaces = [(), (), ()];
+
+    for active in 0..workspaces.len() {
+        let rows = workspace_rail_rows(&workspaces, active).collect::<Vec<_>>();
+        let indices = rows.iter().map(|(index, _, _)| *index).collect::<Vec<_>>();
+        let selected = rows
+            .iter()
+            .filter_map(|(index, _, selected)| selected.then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert_eq!(selected, vec![active]);
+    }
 }
 
 #[test]

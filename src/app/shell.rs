@@ -13,7 +13,7 @@ use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{icon_button, project_menu};
+use crate::app::chrome::{rail_count_badge, toolbar_icon_button};
 use crate::app::editor::EditorView;
 use crate::app::overlays::OverlayState;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, Workspace, is_html_path};
@@ -109,6 +109,7 @@ pub struct Shell {
     /// Last durable preference snapshot scheduled for an atomic write.
     last_settings: Option<settings::SettingsState>,
     pub(crate) terminal_event_sources: HashSet<EntityId>,
+    pub(crate) markdown_event_sources: HashSet<EntityId>,
 }
 
 impl Shell {
@@ -167,6 +168,7 @@ impl Shell {
             last_session: None,
             last_settings: None,
             terminal_event_sources: HashSet::new(),
+            markdown_event_sources: HashSet::new(),
         });
         shell.update(cx, |shell, cx| {
             shell.observe_watch(cx);
@@ -1009,13 +1011,22 @@ impl Shell {
         self.select_workspace(next, cx);
     }
 
-    /// `DESIGN.md` > Workspace Rail. Fixed 176 points, dark in both
+    /// `DESIGN.md` > Workspace Rail. Fixed 230 points, dark in both
     /// appearances, one graphite-to-petrol gradient as its only depth effect.
     fn render_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let active = self.active;
         let total = self.workspaces.len();
+        let active_workspace = self.workspace();
+        let active_name = active_workspace.name.clone();
+        let active_branch = if active_workspace.git.is_repo {
+            active_workspace.git.branch.clone()
+        } else {
+            "no repository".to_string()
+        };
+        let active_changed = active_workspace.git.changed_count();
+        let selected_tab = self.sidebar_tab;
         let shell = cx.entity();
 
         v_flex()
@@ -1039,6 +1050,165 @@ impl Shell {
             )))
             .child(
                 h_flex()
+                    .h(px(64.))
+                    .flex_none()
+                    .items_center()
+                    .gap(Space::S)
+                    .px(Space::M)
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(34.))
+                            .rounded(Radius::CONTROL)
+                            .bg(c.accent)
+                            .text_color(c.accent_ink)
+                            .text_size(Type::HEADLINE * ui_zoom)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(SharedString::from(
+                                active_name
+                                    .chars()
+                                    .next()
+                                    .map_or('A', |initial| initial)
+                                    .to_uppercase()
+                                    .to_string(),
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(Type::BODY * ui_zoom)
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(c.rail_foreground)
+                                    .child(SharedString::from(active_name)),
+                            )
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap(Space::XS)
+                                    .text_size(Type::MICRO * ui_zoom)
+                                    .text_color(c.rail_secondary)
+                                    .child(Icon::new(IconName::Network).xsmall())
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .font_family("JetBrains Mono")
+                                            .child(SharedString::from(active_branch)),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_none()
+                    .px(Space::S)
+                    .gap(Space::XS)
+                    .child(
+                        h_flex()
+                            .id("rail-files")
+                            .cursor_pointer()
+                            .h(px(40.))
+                            .items_center()
+                            .gap(Space::S)
+                            .px(Space::S)
+                            .rounded(Radius::ROW)
+                            .text_color(c.rail_foreground)
+                            .when(selected_tab == SidebarTab::Explorer, |this| {
+                                this.bg(c.rail_selection)
+                                    .border_1()
+                                    .border_color(gpui::white().opacity(0.16))
+                            })
+                            .when(selected_tab != SidebarTab::Explorer, |this| {
+                                this.border_1()
+                                    .border_color(gpui::transparent_black())
+                                    .hover(|this| this.bg(c.rail_hover))
+                            })
+                            .child(Icon::new(IconName::Folder).small())
+                            .child(
+                                div()
+                                    .text_size(Type::BODY * ui_zoom)
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Files"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.sidebar_tab = SidebarTab::Explorer;
+                                this.shows_sidebar = true;
+                                this.focus_mode = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .id("rail-search")
+                            .cursor_pointer()
+                            .h(px(40.))
+                            .items_center()
+                            .gap(Space::S)
+                            .px(Space::S)
+                            .rounded(Radius::ROW)
+                            .border_1()
+                            .border_color(gpui::transparent_black())
+                            .text_color(c.rail_foreground)
+                            .hover(|this| this.bg(c.rail_hover))
+                            .child(Icon::new(IconName::Search).small())
+                            .child(
+                                div()
+                                    .text_size(Type::BODY * ui_zoom)
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Search"),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.on_search_all(&SearchAllFiles, window, cx)
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .id("rail-changes")
+                            .cursor_pointer()
+                            .h(px(40.))
+                            .items_center()
+                            .gap(Space::S)
+                            .px(Space::S)
+                            .rounded(Radius::ROW)
+                            .text_color(c.rail_foreground)
+                            .when(selected_tab == SidebarTab::Git, |this| {
+                                this.bg(c.rail_selection)
+                                    .border_1()
+                                    .border_color(gpui::white().opacity(0.16))
+                            })
+                            .when(selected_tab != SidebarTab::Git, |this| {
+                                this.border_1()
+                                    .border_color(gpui::transparent_black())
+                                    .hover(|this| this.bg(c.rail_hover))
+                            })
+                            .child(Icon::new(IconName::Network).small())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(Type::BODY * ui_zoom)
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Changes"),
+                            )
+                            .when(active_changed > 0, |this| {
+                                this.child(rail_count_badge(active_changed, c, ui_zoom))
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.sidebar_tab = SidebarTab::Git;
+                                this.shows_sidebar = true;
+                                this.focus_mode = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
                     .h(Metrics::PANEL_HEADER)
                     .flex_none()
                     .items_center()
@@ -1048,7 +1218,7 @@ impl Shell {
                         div()
                             .text_size(Type::LABEL * ui_zoom)
                             .text_color(c.rail_secondary)
-                            .child("Workspaces"),
+                            .child("WORKSPACES"),
                     )
                     .child(
                         div()
@@ -1065,170 +1235,149 @@ impl Shell {
                     .overflow_y_scroll()
                     .px(Space::S)
                     .gap(Metrics::RAIL_ITEM_GAP)
-                    .children(
-                        self.workspaces
-                            .iter()
-                            .enumerate()
-                            .map(|(index, workspace)| {
-                                let selected = index == active;
-                                let changed = workspace.git.changed_count();
-                                let name = workspace.name.clone();
-                                let path = workspace.root.to_string_lossy().to_string();
-                                let shell = shell.clone();
-                                v_flex()
-                                    .id(("workspace", index))
-                                    .cursor_pointer()
-                                    .h(Metrics::RAIL_ITEM_HEIGHT)
-                                    .justify_center()
-                                    .gap(px(1.))
-                                    .px(Space::S)
-                                    .rounded(Radius::ROW)
-                                    .when(selected, |this| {
-                                        // Atelier's glass pill: a top-lit
-                                        // hairline over the fill plus a soft
-                                        // drop, so selection sits above the
-                                        // rail instead of staining it.
-                                        this.bg(c.rail_selection)
-                                            .border_1()
-                                            .border_color(gpui::white().opacity(0.16))
-                                            .shadow(crate::app::chrome::shadow_soft())
-                                    })
-                                    .when(!selected, |this| {
-                                        this.border_1()
-                                            .border_color(gpui::transparent_black())
-                                            .hover(|this| this.bg(c.rail_hover))
-                                            .active(|this| this.bg(c.rail_pressed))
-                                    })
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap(Space::XS)
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .truncate()
-                                                    .text_size(Type::BODY * ui_zoom)
-                                                    .text_color(c.rail_foreground)
-                                                    .when(selected, |this| {
-                                                        this.font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    })
-                                                    .child(SharedString::from(
-                                                        workspace.name.clone(),
-                                                    )),
-                                            )
-                                            .when(changed > 0, |this| {
-                                                this.child(
-                                                    div()
-                                                        .flex_none()
-                                                        .font_family("JetBrains Mono")
-                                                        .text_size(Type::MICRO * ui_zoom)
-                                                        .text_color(c.rail_foreground)
-                                                        .child(SharedString::from(
-                                                            changed.to_string(),
-                                                        )),
-                                                )
+                    .children(workspace_rail_rows(&self.workspaces, active).map(
+                        |(index, workspace, selected)| {
+                            let changed = workspace.git.changed_count();
+                            let name = workspace.name.clone();
+                            let path = workspace.root.to_string_lossy().to_string();
+                            let shell = shell.clone();
+                            v_flex()
+                                .id(("workspace", index))
+                                .cursor_pointer()
+                                .h(Metrics::RAIL_ITEM_HEIGHT)
+                                .justify_center()
+                                .gap(px(1.))
+                                .px(Space::S)
+                                .rounded(Radius::ROW)
+                                .when(selected, |this| {
+                                    // Atelier's glass pill: a top-lit
+                                    // hairline over the fill plus a soft
+                                    // drop, so selection sits above the
+                                    // rail instead of staining it.
+                                    this.bg(c.rail_selection)
+                                        .border_1()
+                                        .border_color(gpui::white().opacity(0.16))
+                                        .shadow(crate::app::chrome::shadow_soft())
+                                })
+                                .when(!selected, |this| {
+                                    this.border_1()
+                                        .border_color(gpui::transparent_black())
+                                        .hover(|this| this.bg(c.rail_hover))
+                                        .active(|this| this.bg(c.rail_pressed))
+                                })
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap(Space::XS)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_size(Type::BODY * ui_zoom)
+                                                .text_color(c.rail_foreground)
+                                                .when(selected, |this| {
+                                                    this.font_weight(gpui::FontWeight::SEMIBOLD)
+                                                })
+                                                .child(SharedString::from(workspace.name.clone())),
+                                        )
+                                        .when(changed > 0, |this| {
+                                            this.child(rail_count_badge(changed, c, ui_zoom))
+                                        }),
+                                )
+                                .when(index < 9, |this| {
+                                    this.child(
+                                        div()
+                                            .font_family("JetBrains Mono")
+                                            .text_size(Type::MICRO * ui_zoom)
+                                            .text_color(c.rail_secondary)
+                                            .child(SharedString::from(format!("⌘{}", index + 1))),
+                                    )
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.select_workspace(index, cx)
+                                }))
+                                .on_drag(DraggedWorkspace { index }, move |dragged, _, _, cx| {
+                                    let name = name.clone();
+                                    let colors = c;
+                                    let _ = dragged;
+                                    cx.new(|_| WorkspaceDragPreview { name, c: colors })
+                                })
+                                .drag_over::<DraggedWorkspace>(move |style, _, _, _| {
+                                    style.bg(c.rail_hover).border_color(c.accent)
+                                })
+                                .on_drop(cx.listener(
+                                    move |this, dragged: &DraggedWorkspace, _, cx| {
+                                        this.move_workspace(dragged.index, index, cx)
+                                    },
+                                ))
+                                .context_menu(move |menu, _, _| {
+                                    let path_finder = path.clone();
+                                    let path_copy = path.clone();
+                                    let activate = shell.clone();
+                                    let move_up = shell.clone();
+                                    let move_down = shell.clone();
+                                    let close = shell.clone();
+                                    menu.item(
+                                        PopupMenuItem::new("Activate Workspace")
+                                            .disabled(selected)
+                                            .on_click(move |_, _, cx| {
+                                                activate.update(cx, |shell, cx| {
+                                                    shell.select_workspace(index, cx)
+                                                })
                                             }),
                                     )
-                                    .when(index < 9, |this| {
-                                        this.child(
-                                            div()
-                                                .font_family("JetBrains Mono")
-                                                .text_size(Type::MICRO * ui_zoom)
-                                                .text_color(c.rail_secondary)
-                                                .child(SharedString::from(format!(
-                                                    "⌘{}",
-                                                    index + 1
-                                                ))),
-                                        )
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.select_workspace(index, cx)
-                                    }))
-                                    .on_drag(
-                                        DraggedWorkspace { index },
-                                        move |dragged, _, _, cx| {
-                                            let name = name.clone();
-                                            let colors = c;
-                                            let _ = dragged;
-                                            cx.new(|_| WorkspaceDragPreview { name, c: colors })
-                                        },
-                                    )
-                                    .drag_over::<DraggedWorkspace>(move |style, _, _, _| {
-                                        style.bg(c.rail_hover).border_color(c.accent)
-                                    })
-                                    .on_drop(cx.listener(
-                                        move |this, dragged: &DraggedWorkspace, _, cx| {
-                                            this.move_workspace(dragged.index, index, cx)
+                                    .item(PopupMenuItem::new("Show in Finder").on_click(
+                                        move |_, _, _| {
+                                            std::process::Command::new("open")
+                                                .arg("-R")
+                                                .arg(&path_finder)
+                                                .spawn()
+                                                .ok();
                                         },
                                     ))
-                                    .context_menu(move |menu, _, _| {
-                                        let path_finder = path.clone();
-                                        let path_copy = path.clone();
-                                        let activate = shell.clone();
-                                        let move_up = shell.clone();
-                                        let move_down = shell.clone();
-                                        let close = shell.clone();
-                                        menu.item(
-                                            PopupMenuItem::new("Activate Workspace")
-                                                .disabled(selected)
-                                                .on_click(move |_, _, cx| {
-                                                    activate.update(cx, |shell, cx| {
-                                                        shell.select_workspace(index, cx)
-                                                    })
-                                                }),
-                                        )
-                                        .item(PopupMenuItem::new("Show in Finder").on_click(
-                                            move |_, _, _| {
-                                                std::process::Command::new("open")
-                                                    .arg("-R")
-                                                    .arg(&path_finder)
-                                                    .spawn()
-                                                    .ok();
-                                            },
-                                        ))
-                                        .item(PopupMenuItem::new("Copy Project Path").on_click(
-                                            move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    path_copy.clone(),
-                                                ));
-                                            },
-                                        ))
-                                        .separator()
-                                        .item(
-                                            PopupMenuItem::new("Move Up")
-                                                .disabled(index == 0)
-                                                .on_click(move |_, _, cx| {
-                                                    move_up.update(cx, |shell, cx| {
-                                                        shell.move_workspace(
-                                                            index,
-                                                            index.saturating_sub(1),
-                                                            cx,
-                                                        )
-                                                    })
-                                                }),
-                                        )
-                                        .item(
-                                            PopupMenuItem::new("Move Down")
-                                                .disabled(index + 1 >= total)
-                                                .on_click(move |_, _, cx| {
-                                                    move_down.update(cx, |shell, cx| {
-                                                        shell.move_workspace(index, index + 1, cx)
-                                                    })
-                                                }),
-                                        )
-                                        .separator()
-                                        .item(
-                                            PopupMenuItem::new("Close Workspace")
-                                                .disabled(total <= 1)
-                                                .on_click(move |_, _, cx| {
-                                                    close.update(cx, |shell, cx| {
-                                                        shell.close_workspace(index, cx)
-                                                    })
-                                                }),
-                                        )
-                                    })
-                            }),
-                    ),
+                                    .item(PopupMenuItem::new("Copy Project Path").on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                path_copy.clone(),
+                                            ));
+                                        },
+                                    ))
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("Move Up")
+                                            .disabled(index == 0)
+                                            .on_click(move |_, _, cx| {
+                                                move_up.update(cx, |shell, cx| {
+                                                    shell.move_workspace(
+                                                        index,
+                                                        index.saturating_sub(1),
+                                                        cx,
+                                                    )
+                                                })
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new("Move Down")
+                                            .disabled(index + 1 >= total)
+                                            .on_click(move |_, _, cx| {
+                                                move_down.update(cx, |shell, cx| {
+                                                    shell.move_workspace(index, index + 1, cx)
+                                                })
+                                            }),
+                                    )
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("Close Workspace")
+                                            .disabled(total <= 1)
+                                            .on_click(move |_, _, cx| {
+                                                close.update(cx, |shell, cx| {
+                                                    shell.close_workspace(index, cx)
+                                                })
+                                            }),
+                                    )
+                                })
+                        },
+                    )),
             )
             .child(
                 h_flex()
@@ -1261,11 +1410,10 @@ impl Shell {
     /// centred against the whole window, view controls in primary actions.
     fn render_toolbar(&mut self, title_inset: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
-        let workspace = self.workspace();
-        let name = workspace.name.clone();
-        let path = workspace.root.to_string_lossy().to_string();
-        let shows_sidebar = self.shows_sidebar;
-        let shows_inspector = self.shows_inspector;
+        let layout = self.layout;
+        let compact = layout == LayoutMode::Compact;
+        let shows_sidebar = self.shows_sidebar && !self.focus_mode;
+        let shows_inspector = self.shows_inspector && layout.allows_inspector() && !self.focus_mode;
         let dark = self.dark;
 
         // One unified compact row, like atelier's toolbar: the traffic lights,
@@ -1274,12 +1422,12 @@ impl Shell {
         v_flex()
             .w_full()
             .flex_none()
-            .bg(crate::app::chrome::chrome_gradient(c))
+            .bg(c.toolbar)
             .border_b_1()
-            .border_color(c.border)
+            .border_color(c.rail_border)
             .child(
                 h_flex()
-                    .h(Metrics::TAB_BAR)
+                    .h(Metrics::TOP_CHROME)
                     .w_full()
                     .items_center()
                     .px(Space::S)
@@ -1289,11 +1437,12 @@ impl Shell {
                     .when(title_inset > px(0.), |this| this.pl(px(84.)))
                     .child(
                         h_flex()
-                            .flex_1()
+                            .when(compact, |this| this.flex_none())
+                            .when(!compact, |this| this.flex_1())
                             .h_full()
                             .items_center()
                             .gap(Space::XS)
-                            .child(icon_button(
+                            .child(toolbar_icon_button(
                                 "toggle-sidebar",
                                 IconName::PanelLeft,
                                 shows_sidebar,
@@ -1302,18 +1451,72 @@ impl Shell {
                                     this.on_toggle_sidebar(&ToggleSidebar, window, cx)
                                 }),
                             ))
+                            .when(!compact, |this| {
+                                this.child(
+                                    div()
+                                        .ml(Space::XS)
+                                        .text_size(Type::UI * self.ui_zoom)
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(c.rail_foreground)
+                                        .child("Reading Room"),
+                                )
+                            })
                             .child(crate::app::chrome::toolbar_drag_filler()),
                     )
-                    .child(project_menu(&name, &path, c, self.ui_zoom))
                     .child(
                         h_flex()
-                            .flex_1()
+                            .id("global-search")
+                            .cursor_pointer()
+                            .when(compact, |this| this.flex_1().min_w(px(0.)))
+                            .when(!compact, |this| {
+                                this.w(Metrics::PROJECT_MENU_WIDTH).flex_none()
+                            })
+                            .h(Metrics::FIELD)
+                            .items_center()
+                            .gap(Space::S)
+                            .px(Space::M)
+                            .rounded(Radius::CONTROL)
+                            .bg(c.editor)
+                            .border_1()
+                            .border_color(c.border)
+                            .hover(|this| this.border_color(c.accent.opacity(0.7)))
+                            .child(
+                                Icon::new(IconName::Search)
+                                    .xsmall()
+                                    .text_color(c.ink_secondary),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_size(Type::LABEL * self.ui_zoom)
+                                    .text_color(c.ink_secondary)
+                                    .child("Search files, symbols, commits..."),
+                            )
+                            .when(!compact, |this| {
+                                this.child(
+                                    div()
+                                        .font_family("JetBrains Mono")
+                                        .text_size(Type::MICRO * self.ui_zoom)
+                                        .text_color(c.ink_secondary.opacity(0.8))
+                                        .child("⌘K"),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.on_quick_open(&QuickOpen, window, cx)
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .when(compact, |this| this.flex_none())
+                            .when(!compact, |this| this.flex_1())
                             .h_full()
                             .items_center()
                             .justify_end()
                             .gap(Space::XS)
                             .child(crate::app::chrome::toolbar_drag_filler())
-                            .child(icon_button(
+                            .child(toolbar_icon_button(
                                 "toggle-appearance",
                                 if dark { IconName::Moon } else { IconName::Sun },
                                 false,
@@ -1322,16 +1525,21 @@ impl Shell {
                                     this.on_toggle_appearance(&ToggleAppearance, window, cx)
                                 }),
                             ))
-                            .child(icon_button(
-                                "quick-open",
-                                IconName::Search,
-                                false,
+                            .child(toolbar_icon_button(
+                                "toggle-changes",
+                                IconName::Network,
+                                self.sidebar_tab == SidebarTab::Git
+                                    && self.shows_sidebar
+                                    && !self.focus_mode,
                                 c,
-                                cx.listener(|this, _, window, cx| {
-                                    this.on_quick_open(&QuickOpen, window, cx)
+                                cx.listener(|this, _, _, cx| {
+                                    this.sidebar_tab = SidebarTab::Git;
+                                    this.shows_sidebar = true;
+                                    this.focus_mode = false;
+                                    cx.notify();
                                 }),
                             ))
-                            .child(icon_button(
+                            .child(toolbar_icon_button(
                                 "focus-mode",
                                 IconName::Maximize,
                                 self.focus_mode,
@@ -1340,26 +1548,27 @@ impl Shell {
                                     this.on_toggle_focus_mode(&ToggleFocusMode, window, cx)
                                 }),
                             ))
-                            .child(icon_button(
-                                "toggle-inspector",
-                                IconName::PanelRight,
-                                shows_inspector,
-                                c,
-                                cx.listener(|this, _, window, cx| {
-                                    this.on_toggle_inspector(&ToggleInspector, window, cx)
-                                }),
-                            )),
+                            .when(layout.allows_inspector(), |this| {
+                                this.child(toolbar_icon_button(
+                                    "toggle-inspector",
+                                    IconName::PanelRight,
+                                    shows_inspector,
+                                    c,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.on_toggle_inspector(&ToggleInspector, window, cx)
+                                    }),
+                                ))
+                            }),
                     ),
             )
     }
 
-    /// `DESIGN.md` > Workspace Chrome: branch, focus state, token estimate and
-    /// zoom in the 26-point status bar.
+    /// `DESIGN.md` > Workspace Status: Git identity leads; real active-surface
+    /// metadata, working-tree state, token estimate and zoom trail.
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::app::workspace::TabKind;
-
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
+        let condensed = self.layout != LayoutMode::Wide;
         let workspace = self.workspace();
         let branch = if workspace.git.is_repo {
             workspace.git.branch.clone()
@@ -1368,18 +1577,55 @@ impl Shell {
         };
         let head = workspace.git.head_short.clone();
         let changed = workspace.git.changed_count();
-        let layout = match self.layout {
-            LayoutMode::Compact => "compact",
-            LayoutMode::Standard => "standard",
-            LayoutMode::Wide => "wide",
-        };
-        // The estimate is deliberately rough; exact tokenisation depends on the
-        // model, which is why DESIGN.md prefixes it with a tilde.
-        let tokens = match workspace.selected_tab().map(|tab| &tab.kind) {
-            Some(TabKind::File { editor, .. }) => Some(editor.read(cx).byte_len() / 4),
-            _ => None,
+        let git_state = workspace.git.is_repo.then_some(if changed == 0 {
+            (true, "Working Tree Clean")
+        } else {
+            (false, "Working Tree Dirty")
+        });
+        let (surface, document_mode, line_ending, tokens) = match workspace
+            .selected_tab()
+            .map(|tab| &tab.kind)
+        {
+            Some(TabKind::File {
+                path,
+                editor,
+                mode,
+                preview_view,
+            }) => {
+                let editor = editor.read(cx);
+                let surface = Some(file_status_label(path, editor.language().name()));
+                let previewable = preview_view.is_some() || is_html_path(path);
+                let document_mode = previewable.then_some(match mode {
+                    FileMode::Preview => "Preview",
+                    FileMode::Source => "Raw",
+                });
+                let line_ending = Some(editor.line_ending());
+                (
+                    surface,
+                    document_mode,
+                    line_ending,
+                    Some(editor.byte_len() / 4),
+                )
+            }
+            Some(TabKind::Terminal(_)) => (Some("Terminal".to_string()), None, None, None),
+            Some(TabKind::Image { .. }) => (Some("Image".to_string()), None, None, None),
+            Some(TabKind::Video { .. }) => (Some("Video".to_string()), None, None, None),
+            Some(TabKind::Diff { path, .. }) => (
+                Some(format!(
+                    "{} Diff",
+                    file_status_label(Path::new(path), "Text")
+                )),
+                None,
+                None,
+                None,
+            ),
+            Some(TabKind::ImageDiff { .. }) => (Some("Image Diff".to_string()), None, None, None),
+            None => (None, None, None, None),
         };
         let status = self.status.clone();
+        let changed_label = condensed
+            .then(|| format!("{changed} ch"))
+            .unwrap_or_else(|| format!("{changed} changed"));
 
         h_flex()
             .h(Metrics::STATUS_BAR)
@@ -1387,7 +1633,8 @@ impl Shell {
             .flex_none()
             .items_center()
             .px(Space::M)
-            .gap(Space::M)
+            .gap(if condensed { Space::S } else { Space::M })
+            .overflow_hidden()
             .bg(crate::app::chrome::chrome_gradient(c))
             .border_t_1()
             .border_color(c.border)
@@ -1395,12 +1642,17 @@ impl Shell {
             .text_color(c.ink_secondary)
             .child(
                 h_flex()
-                    .id("branch")
-                    .cursor_pointer()
+                    .min_w(px(0.))
                     .items_center()
                     .gap(Space::XS)
                     .child(Icon::new(IconName::Network).xsmall())
-                    .child(div().child(SharedString::from(branch)))
+                    .child(
+                        div()
+                            .min_w(px(0.))
+                            .when(condensed, |this| this.max_w(px(80.)))
+                            .truncate()
+                            .child(SharedString::from(branch)),
+                    )
                     .when(!head.is_empty(), |this| {
                         this.child(
                             div()
@@ -1413,18 +1665,47 @@ impl Shell {
             .when(changed > 0, |this| {
                 this.child(
                     div()
+                        .flex_none()
                         .text_color(c.git_modified)
-                        .child(SharedString::from(format!("{changed} changed"))),
+                        .child(SharedString::from(changed_label)),
                 )
             })
-            .child(div().flex_1())
-            .when_some(status, |this, text| this.child(div().child(text)))
-            .child(div().child(SharedString::from(layout)))
+            .child(div().flex_1().min_w(px(0.)))
+            .when_some(status.filter(|_| !condensed), |this, text| {
+                this.child(div().max_w(px(180.)).truncate().child(text))
+            })
+            .when_some(surface, |this, surface| this.child(div().child(surface)))
+            .when_some(document_mode, |this, mode| this.child(div().child(mode)))
+            .when_some(line_ending, |this, line_ending| {
+                this.child(div().font_family("JetBrains Mono").child(line_ending))
+            })
+            .when_some(git_state, |this, (clean, label)| {
+                let label = if condensed {
+                    if clean { "Clean" } else { "Dirty" }
+                } else {
+                    label
+                };
+                this.child(
+                    h_flex()
+                        .items_center()
+                        .gap(Space::XS)
+                        .child(div().size(px(6.)).rounded_full().bg(if clean {
+                            c.git_added
+                        } else {
+                            c.git_modified
+                        }))
+                        .child(label),
+                )
+            })
             .when_some(tokens, |this, tokens| {
                 this.child(
                     div()
                         .font_family("JetBrains Mono")
-                        .child(SharedString::from(format!("~{tokens} tokens"))),
+                        .child(SharedString::from(if condensed {
+                            format!("~{tokens} tok")
+                        } else {
+                            format!("~{tokens} tokens")
+                        })),
                 )
             })
             .child(
@@ -1475,6 +1756,8 @@ impl Render for Shell {
 
         let show_sidebar = self.shows_sidebar && layout.allows_sidebar() && !self.focus_mode;
         let show_inspector = self.shows_inspector && layout.allows_inspector() && !self.focus_mode;
+        let show_compact_sidebar =
+            self.shows_sidebar && layout == LayoutMode::Compact && !self.focus_mode;
 
         div()
             .id("shell")
@@ -1555,16 +1838,18 @@ impl Render for Shell {
                                             .child(
                                                 h_resizable("workspace-split")
                                                     .with_state(&self.split)
-                                                    .when(show_sidebar, |split| split.child(
-                                                        resizable_panel()
-                                                            .flex_none()
-                                                            .size(Metrics::SIDEBAR_IDEAL)
-                                                            .size_range(
-                                                                Metrics::SIDEBAR_MIN
-                                                                    ..Metrics::SIDEBAR_MAX,
-                                                            )
-                                                            .child(self.render_sidebar(cx)),
-                                                    ))
+                                                    .when(show_sidebar, |split| {
+                                                        split.child(
+                                                            resizable_panel()
+                                                                .flex_none()
+                                                                .size(Metrics::SIDEBAR_IDEAL)
+                                                                .size_range(
+                                                                    Metrics::SIDEBAR_MIN
+                                                                        ..Metrics::SIDEBAR_MAX,
+                                                                )
+                                                                .child(self.render_sidebar(cx)),
+                                                        )
+                                                    })
                                                     .child(
                                                         resizable_panel()
                                                             .size_range(
@@ -1572,24 +1857,79 @@ impl Render for Shell {
                                                             )
                                                             .child(self.render_center(window, cx)),
                                                     )
-                                                    .when(show_inspector, |split| split.child(
-                                                        resizable_panel()
-                                                            .flex_none()
-                                                            .size(Metrics::INSPECTOR_IDEAL)
-                                                            .size_range(
-                                                                Metrics::INSPECTOR_MIN
-                                                                    ..Metrics::INSPECTOR_MAX,
-                                                            )
-                                                            .child(self.render_inspector(cx)),
-                                                    )),
+                                                    .when(show_inspector, |split| {
+                                                        split.child(
+                                                            resizable_panel()
+                                                                .flex_none()
+                                                                .size(Metrics::INSPECTOR_IDEAL)
+                                                                .size_range(
+                                                                    Metrics::INSPECTOR_MIN
+                                                                        ..Metrics::INSPECTOR_MAX,
+                                                                )
+                                                                .child(self.render_inspector(cx)),
+                                                        )
+                                                    }),
                                             ),
                                     )
+                                    .when(show_compact_sidebar, |this| {
+                                        this.child(
+                                            div()
+                                                .id("compact-navigator-scrim")
+                                                .absolute()
+                                                .top(px(0.))
+                                                .right(px(0.))
+                                                .bottom(Metrics::STATUS_BAR)
+                                                .left(Metrics::SIDEBAR_IDEAL)
+                                                .cursor_pointer()
+                                                .bg(gpui::black().opacity(0.12))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.shows_sidebar = false;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("compact-navigator")
+                                                .absolute()
+                                                .top(px(0.))
+                                                .bottom(Metrics::STATUS_BAR)
+                                                .left(px(0.))
+                                                .w(Metrics::SIDEBAR_IDEAL)
+                                                .bg(c.sidebar)
+                                                .shadow_xl()
+                                                .child(self.render_sidebar(cx)),
+                                        )
+                                    })
                                     .child(self.render_status_bar(cx))
                                     .children(self.render_overlay(window, cx)),
                             ),
                     ),
             )
     }
+}
+
+fn file_status_label(path: &Path, language: &str) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("md" | "markdown") => "Markdown".to_string(),
+        Some("txt") => "Plain Text".to_string(),
+        Some(extension) if language.eq_ignore_ascii_case("text") => extension.to_ascii_uppercase(),
+        _ => language.to_string(),
+    }
+}
+
+pub(crate) fn workspace_rail_rows<T>(
+    items: &[T],
+    active: usize,
+) -> impl Iterator<Item = (usize, &T, bool)> {
+    items
+        .iter()
+        .enumerate()
+        .map(move |(index, item)| (index, item, index == active))
 }
 
 /// Picks the workspace root for this launch.
@@ -1679,6 +2019,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-t", ToggleInspector, None),
         KeyBinding::new("cmd-e", ToggleSidebarTab, None),
         KeyBinding::new("cmd-shift-e", ToggleFocusMode, None),
+        KeyBinding::new("cmd-k", QuickOpen, None),
         KeyBinding::new("cmd-p", QuickOpen, None),
         KeyBinding::new("cmd-shift-p", CommandPalette, None),
         KeyBinding::new("cmd-shift-f", SearchAllFiles, None),

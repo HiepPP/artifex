@@ -14,8 +14,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, IntoElement, ListAlignment, ListState, ParentElement, Pixels,
-    Render, SharedString, Styled as _, Window, canvas, div, list, px, rems,
+    AnyElement, App, Context, Entity, EventEmitter, IntoElement, ListAlignment, ListState,
+    ParentElement, Pixels, Render, SharedString, Styled as _, Window, canvas, div, list, px, rems,
 };
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{h_flex, v_flex};
@@ -24,7 +24,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Radius, Space, Type};
 
 /// `DESIGN.md` > documentMaxWidth / documentBleedMaxWidth.
-const PROSE_WIDTH: f32 = 640.;
+const PROSE_WIDTH: f32 = 720.;
 const BLEED_WIDTH: f32 = 1180.;
 
 #[derive(Clone)]
@@ -38,16 +38,16 @@ enum Block {
     Table(Vec<Vec<String>>),
 }
 
-/// `DESIGN.md` > markdownOutlineWidth.
-const OUTLINE_WIDTH: f32 = 200.;
-/// Below this the outline would leave no readable measure, so it hides.
-const OUTLINE_MIN_HOST: f32 = 900.;
-
 /// One heading in the "On This Page" rail.
 struct Heading {
     block: usize,
     level: u8,
     title: SharedString,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ActiveHeadingChanged {
+    pub block: Option<usize>,
 }
 
 /// A parsed Markdown document.
@@ -59,6 +59,8 @@ pub struct MarkdownView {
     path: PathBuf,
     blocks: Vec<Block>,
     headings: Vec<Heading>,
+    active_heading: Option<usize>,
+    links: Vec<PathBuf>,
     /// Virtualised block list. Each prose block is now a `TextView`, far heavier
     /// than the plain-text `div` it replaced: laying every block out on each
     /// scroll frame dropped frames on long documents. `list` measures and paints
@@ -81,6 +83,8 @@ impl MarkdownView {
                 path,
                 blocks: Vec::new(),
                 headings: Vec::new(),
+                active_heading: None,
+                links: Vec::new(),
                 list: ListState::new(0, ListAlignment::Top, px(400.)),
                 measure: Rc::new(Cell::new(px(PROSE_WIDTH))),
             };
@@ -92,6 +96,7 @@ impl MarkdownView {
     pub fn reload(&mut self) {
         let source = std::fs::read_to_string(&self.path).unwrap_or_default();
         self.blocks = parse(&source);
+        self.links = local_links(&source, &self.path);
         self.headings = self
             .blocks
             .iter()
@@ -107,34 +112,73 @@ impl MarkdownView {
             .collect();
         // New block count, fresh (unmeasured) items.
         self.list.reset(self.blocks.len());
+        self.active_heading = active_heading_block(&self.headings, 0);
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub fn outline_items(&self) -> Vec<(usize, u8, SharedString, bool)> {
+        self.headings
+            .iter()
+            .map(|heading| {
+                (
+                    heading.block,
+                    heading.level,
+                    heading.title.clone(),
+                    Some(heading.block) == self.active_heading,
+                )
+            })
+            .collect()
+    }
+
+    pub fn linked_files(&self) -> Vec<PathBuf> {
+        self.links.clone()
+    }
+
+    pub fn scroll_to_block(&mut self, block: usize, cx: &mut Context<Self>) {
+        self.list.scroll_to_reveal_item(block);
+        self.set_active_heading(Some(block), cx);
+    }
+
+    fn publish_active_heading(&mut self, cx: &mut Context<Self>) {
+        let top = self.list.logical_scroll_top().item_ix;
+        let active = active_heading_block(&self.headings, top);
+        self.set_active_heading(active, cx);
+    }
+
+    fn set_active_heading(&mut self, block: Option<usize>, cx: &mut Context<Self>) {
+        if self.active_heading == block {
+            return;
+        }
+        self.active_heading = block;
+        cx.emit(ActiveHeadingChanged { block });
+    }
 }
 
+impl EventEmitter<ActiveHeadingChanged> for MarkdownView {}
+
 impl Render for MarkdownView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let zoom = cx.global::<EditorZoom>().0;
-        // DESIGN.md hides the rail when the column is too narrow to keep a
-        // readable measure, and needs at least two headings to be worth it.
-        let shows_outline =
-            self.headings.len() >= 2 && f32::from(window.viewport_size().width) >= OUTLINE_MIN_HOST;
         let measure = self.measure.clone();
-        let top = self.list.logical_scroll_top().item_ix;
-        let active = self
-            .headings
-            .iter()
-            .rposition(|heading| heading.block <= top)
-            .unwrap_or(0);
+        let scroll_view = cx.entity();
 
         div()
             .flex()
             .flex_row()
             .size_full()
             .bg(c.editor)
+            .on_scroll_wheel(move |_, window, cx| {
+                let scroll_view = scroll_view.clone();
+                window.defer(cx, move |_, cx| {
+                    let _ = scroll_view.update(cx, |view, cx| {
+                        view.publish_active_heading(cx);
+                    });
+                });
+            })
             // A scrolling box is sized by its content on the cross axis, so a
             // plain `flex_1` column grows to the widest table instead of
             // wrapping it. Giving the viewport an absolute frame inside a
@@ -184,70 +228,64 @@ impl Render for MarkdownView {
                         ),
                 )
             })
-            .when(shows_outline, |this| {
-                this.child(
-                    v_flex()
-                        .id("markdown-outline")
-                        .w(px(OUTLINE_WIDTH))
-                        .flex_none()
-                        .overflow_y_scroll()
-                        .py(Space::XL)
-                        .pr(Space::L)
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .pb(Space::S)
-                                .text_size(Type::MICRO * zoom)
-                                .text_color(c.ink_secondary)
-                                .child("ON THIS PAGE"),
-                        )
-                        .children(self.headings.iter().enumerate().map(|(index, heading)| {
-                            let is_active = index == active;
-                            let block = heading.block;
-                            let list = self.list.clone();
-                            h_flex()
-                                .id(("outline", index))
-                                .cursor_pointer()
-                                .items_start()
-                                .gap(Space::XS)
-                                .py(px(2.))
-                                .child(
-                                    // A short accent indicator marks the active
-                                    // row on the leading edge.
-                                    div().w(px(2.)).h(px(14.)).flex_none().rounded(px(1.)).bg(
-                                        if is_active {
-                                            c.accent
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .truncate()
-                                        .pl(px((heading.level.saturating_sub(1) as f32) * 10.))
-                                        .text_size(if heading.level <= 2 {
-                                            Type::CAPTION * zoom
-                                        } else {
-                                            Type::MICRO * zoom
-                                        })
-                                        .text_color(if is_active {
-                                            c.accent
-                                        } else if heading.level <= 2 {
-                                            c.ink_secondary
-                                        } else {
-                                            c.ink_secondary.opacity(0.7)
-                                        })
-                                        .hover(|this| this.text_color(c.ink))
-                                        .child(heading.title.clone()),
-                                )
-                                .on_click(move |_, _, _| list.scroll_to_reveal_item(block))
-                        })),
-                )
-            })
     }
+}
+
+fn active_heading_block(headings: &[Heading], top: usize) -> Option<usize> {
+    headings
+        .iter()
+        .rfind(|heading| heading.block <= top)
+        .map(|heading| heading.block)
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+
+    #[test]
+    fn heading_before_viewport_is_not_marked_active() {
+        let headings = vec![
+            Heading {
+                block: 3,
+                level: 1,
+                title: SharedString::from("First"),
+            },
+            Heading {
+                block: 8,
+                level: 2,
+                title: SharedString::from("Second"),
+            },
+        ];
+
+        assert_eq!(active_heading_block(&headings, 0), None);
+        assert_eq!(active_heading_block(&headings, 7), Some(3));
+        assert_eq!(active_heading_block(&headings, 8), Some(8));
+    }
+}
+
+fn local_links(source: &str, document: &Path) -> Vec<PathBuf> {
+    let Some(parent) = document.parent() else {
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    for event in Parser::new_ext(source, Options::all()) {
+        let Event::Start(Tag::Link { dest_url, .. }) = event else {
+            continue;
+        };
+        let target = dest_url.split('#').next().unwrap_or_default();
+        if target.is_empty()
+            || target.contains("://")
+            || target.starts_with("mailto:")
+            || target.starts_with('#')
+        {
+            continue;
+        }
+        let path = parent.join(target);
+        if path.is_file() && !links.contains(&path) {
+            links.push(path);
+        }
+    }
+    links
 }
 
 /// A selectable, formatted rendering of one prose block's inline Markdown.
@@ -278,7 +316,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
     match block.clone() {
         Block::Heading(level, text) => {
             let ratio = match level {
-                1 => 1.85,
+                1 => 2.875,
                 2 => 1.45,
                 3 => 1.18,
                 4 => 1.00,
@@ -293,6 +331,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
                     div()
                         .text_size((ed * ratio))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .when(level <= 2, |this| this.font_family("Times New Roman"))
                         .when(level == 3, |this| this.text_color(c.accent))
                         .child(prose_text(index, text)),
                 )
