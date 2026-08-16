@@ -165,7 +165,7 @@ Rules:
 | `PALETTE_FIELD` | 52 | Overlay query field |
 | `TITLE_BAR` | 28 | Reserve under the transparent title bar |
 | `documentMaxWidth` | 720 | Markdown prose measure |
-| `documentBleedMaxWidth` | 1180 | Markdown wide-block measure |
+| `documentBleedMaxWidth` | 880 | Markdown wide-block measure |
 | `CONTEXT_WIDTH` | 300 | Wide-layout context rail |
 
 The title-bar reserve is not a constant at use sites. Read it through
@@ -565,19 +565,52 @@ selection is off (keyboard selection still works).
 ### Markdown Preview
 
 - Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
-- Hold prose on a 720-point measure. Let card blocks bleed to 1180: tables and
+- Hold prose on a 720-point measure. Let card blocks bleed to 880: tables and
   fenced code cards read better wider, prose does not.
+- Set document viewport horizontal padding from the window mode: 48 points in
+  Wide, 32 in Standard, and 24 in Compact. Let the scroll viewport fill the
+  reader from top to bottom. Heading and block rhythm own vertical spacing.
+  Keep structural padding fixed while editor zoom scales type and its derived
+  vertical rhythm.
 - Publish headings and local links to the shell context rail. The Markdown view
   owns parsing and scroll targets; the shell owns the surrounding rail.
-- Heading ratios are H1 `2.875`, H2 `1.45`, H3 `1.18`, H4 `1.00`, H5 and H6
-  `0.92`. H1 and H2 use the document serif face. H1 resolves to 46 points at
+- Heading ratios are H1 `2.875`, H2 `1.75`, H3 `1.1875`, H4 `1.00`, H5 and H6
+  `0.9375`. H1 and H2 use the document serif face. H1 resolves to 46 points at
   default zoom. Draw the H1 and H2 rule as an accent lead segment followed by a
   hairline.
-- Line-height ratios are prose `1.62`, list items `1.55`, table cells `1.45`,
-  code lines `1.35`.
-- Render a divider as a centered three-dot ornament, accent in the middle.
-- Keep the accent budget small: the H3 eyebrow, the H1 and H2 rule lead, and the
-  quote rule.
+- Resolve the default heading sizes to H1 46, H2 28, H3 19, H4 16, and H5-H6
+  15 points. Use semibold weight throughout. Give H1 and H2 56 points before
+  and 20 points after. Give H3-H6 32 points before and 12 points after. This
+  larger section rhythm separates long reading passages without adding cards.
+  H1 starts the document without an extra top gap.
+- Set prose at 16 points with a `1.62` line-height and a 20-point block gap.
+  Links use the accent and underline. Emphasis stays italic; strong stays
+  semibold. Inline code uses the mono face on the low-contrast selection fill.
+- Give list content a 24-point indent and an eight-point marker gap. Keep list
+  line-height at `1.55`. Task items use a square checkbox; checked items use the
+  completed workflow colour and secondary struck text.
+- Give quotes a three-point accent rule, a 16-point text inset, and `1.62`
+  line-height. Keep quote text italic and secondary, without a card fill.
+- Render a divider as a centered three-dot ornament with 28 points of vertical
+  gap, accent in the middle.
+- Set code cards at 14.5-point mono type with `1.35` line-height. Keep the
+  language header, line numbers, 12-point body inset, eight-point radius, and
+  the low-contrast panel fill. Parse a supported fence language once on reload
+  and reuse the shared syntax palette while rendering visible code cards.
+- Keep long code lines on one line. Show a horizontal scrollbar only when
+  content exceeds the card width.
+- Place a copy control at the right edge of the code header. After copying,
+  show check feedback for about two seconds.
+- Set table cells at 14.5 points with `1.45` line-height and 12-point insets.
+  Use a raised semibold header, subtle alternating rows, a one-point border, and
+  an eight-point radius.
+- In the context outline, mark the active heading with semibold text and the
+  terracotta accent. Do not add a second reader identity header.
+- Clicking an outline item aligns that heading with the top of the reader,
+  even when it is already visible.
+- Keep the accent budget small: the H1 and H2 rule lead, the quote rule, and the
+  divider centre. Light and dark appearances use the shared `editor`, `panel`,
+  `raised`, `border`, `ink`, `ink_secondary`, `accent`, and workflow tokens.
 
 Divergence: Atelier renders one selectable native document so selection crosses
 blocks. GPUI has no equivalent of `NSTextStorage`, so this build renders a tree

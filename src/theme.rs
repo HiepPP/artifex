@@ -304,6 +304,9 @@ pub fn init(dark: bool, cx: &mut App) {
     colors.popover_foreground = c.ink;
     colors.input = c.border;
     colors.ring = c.accent;
+    colors.link = c.accent;
+    colors.link_hover = c.accent;
+    colors.link_active = c.accent;
     colors.accent = c.selection;
     colors.accent_foreground = c.ink;
     colors.primary = c.accent;

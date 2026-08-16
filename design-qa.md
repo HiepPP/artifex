@@ -190,6 +190,80 @@ Automated verification:
 - `./scripts/test.sh`: 53 passed, 0 failed.
 - Existing compiler warnings remain non-blocking.
 
+## Markdown Interaction Pass - 2026-08-16
+
+### Scope
+
+- Kept the existing Markdown parser, block set, virtualization, tables, and prose selection.
+- Added code-card interaction only: copy feedback and horizontal overflow.
+- Changed outline clicks from reveal-only scrolling to exact top anchoring.
+
+### Native Evidence
+
+- Wide light Copy state: `app-design/markdown-preview-qa-next/wide-light-copy-check.png`.
+- Wide light restored Copy state: `app-design/markdown-preview-qa-next/wide-light-copy-restored.png`.
+- Wide light no-wrap code: `app-design/markdown-preview-qa-next/wide-light-code-nowrap.png`.
+- Wide dark: `app-design/markdown-preview-qa-next/wide-dark.png`.
+- Wide dark at 140 percent: `app-design/markdown-preview-qa-next/wide-dark-zoom-140.png`.
+- Standard 1200 light: `app-design/markdown-preview-qa-next/standard-1200-light.png`.
+- Compact 850 light: `app-design/markdown-preview-qa-next/compact-850-light.png`.
+- Compact 850 dark stress state: `app-design/markdown-preview-qa-next/compact-850-dark-zoom-140.png`.
+- Raw mode regression: `app-design/markdown-preview-qa-next/standard-raw.png`.
+
+### Interaction Results
+
+- Each code header keeps the language at left and the Copy control at right.
+- Copy writes the complete rendered code block. `pbpaste` returned both source lines byte-for-byte.
+- The Copy icon changes to Check, then returns after about two seconds.
+- Long code lines stay on one line. A horizontal scrollbar appears only on overflow.
+- One outline click aligned `Build and Run` with the reader top and updated its active state.
+- Preview and Raw still switch without reopening the file.
+- Wide, Standard, Compact, light, dark, and 140-percent states showed no reader overlap.
+
+### Automated Verification
+
+- `./scripts/build.sh`: passed.
+- `./scripts/test.sh`: 54 passed, 0 failed.
+- `cargo fmt -- --check`: passed with the pinned toolchain.
+- `git diff --check`: passed.
+- Conflict marker search: passed.
+
+## Markdown Rendering Specification Pass - 2026-08-16
+
+### Scope
+
+- Saved the focused renderer blueprint as `app-design/markdown-preview-rendering-spec-v3.png`.
+- Matched H2 to 28 points and strengthened heading spacing.
+- Bounded rich code and table blocks at 880 points.
+- Extracted code rendering from the general block renderer.
+- Parsed supported fence languages once during Markdown reload.
+- Reused the existing syntax palette for visible fenced code.
+- Kept the parser, supported Markdown blocks, selection, and Copy behavior unchanged.
+
+### Native Evidence
+
+- Wide light syntax: `app-design/markdown-preview-qa-refactor/wide-light-syntax.png`.
+- Wide dark syntax: `app-design/markdown-preview-qa-refactor/wide-dark-syntax.png`.
+- Compact dark reader: `app-design/markdown-preview-qa-refactor/compact-dark-reader.png`.
+- Compact dark at 140 percent: `app-design/markdown-preview-qa-refactor/compact-dark-zoom-140.png`.
+
+### Results
+
+- Bash commands use teal functions, gold options, and muted comments.
+- H2 headings now separate major sections without competing with H1.
+- Rich blocks stay readable in wide and compact layouts.
+- Compact 140-percent zoom wraps headings without overlap.
+- Copy still returns the complete fenced block byte-for-byte.
+- Dark mode keeps syntax colors distinct from code-card surfaces.
+
+### Automated Verification
+
+- Focused renderer tests: 3 passed, 0 failed.
+- `./scripts/test.sh`: 57 passed, 0 failed.
+- `./scripts/build.sh`: passed and rebuilt the application bundle.
+- `cargo fmt -- --check`: passed with the pinned toolchain.
+- Existing compiler warnings remain non-blocking.
+
 ## Final Result
 
 final result: passed

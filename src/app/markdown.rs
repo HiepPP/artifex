@@ -14,25 +14,53 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, IntoElement, ListAlignment, ListState,
-    ParentElement, Pixels, Render, SharedString, Styled as _, Window, canvas, div, list, px, rems,
+    AnyElement, App, Context, Entity, EventEmitter, HighlightStyle, IntoElement, ListAlignment,
+    ListOffset, ListState, ParentElement, Pixels, Render, SharedString, Styled as _, StyledText,
+    Window, canvas, div, list, px, rems,
 };
+use gpui_component::clipboard::Clipboard;
+use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::{h_flex, v_flex};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Radius, Space, Type};
+use crate::services::highlight::{Highlighter, Lang, line_starts};
+use crate::theme::{
+    ActiveTokens as _, Colors, EditorZoom, LayoutMode, Metrics, Radius, Space, Type,
+};
 
 /// `DESIGN.md` > documentMaxWidth / documentBleedMaxWidth.
 const PROSE_WIDTH: f32 = 720.;
-const BLEED_WIDTH: f32 = 1180.;
+const BLEED_WIDTH: f32 = 880.;
+const WIDE_VIEWPORT_PADDING: Pixels = px(48.);
+
+#[derive(Clone)]
+struct HighlightedCode {
+    language: String,
+    source: String,
+    highlighter: Rc<Highlighter>,
+    line_starts: Rc<Vec<usize>>,
+}
+
+impl HighlightedCode {
+    fn new(language: String, source: String) -> Self {
+        let mut highlighter = Highlighter::new(fence_language(&language));
+        highlighter.parse(&source);
+        Self {
+            language,
+            line_starts: Rc::new(line_starts(&source)),
+            source,
+            highlighter: Rc::new(highlighter),
+        }
+    }
+}
 
 #[derive(Clone)]
 enum Block {
     Heading(u8, String),
     Paragraph(String),
     ListItem(usize, String, Option<bool>),
-    Code(String, String),
+    Code(HighlightedCode),
     Quote(String),
     Rule,
     Table(Vec<Vec<String>>),
@@ -138,7 +166,10 @@ impl MarkdownView {
     }
 
     pub fn scroll_to_block(&mut self, block: usize, cx: &mut Context<Self>) {
-        self.list.scroll_to_reveal_item(block);
+        self.list.scroll_to(ListOffset {
+            item_ix: block,
+            offset_in_item: px(0.),
+        });
         self.set_active_heading(Some(block), cx);
     }
 
@@ -160,9 +191,15 @@ impl MarkdownView {
 impl EventEmitter<ActiveHeadingChanged> for MarkdownView {}
 
 impl Render for MarkdownView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let zoom = cx.global::<EditorZoom>().0;
+        let window_width = f32::from(window.viewport_size().width) - f32::from(Metrics::RAIL_WIDTH);
+        let viewport_padding = match LayoutMode::for_width(window_width) {
+            LayoutMode::Wide => WIDE_VIEWPORT_PADDING,
+            LayoutMode::Standard => Space::XXL,
+            LayoutMode::Compact => Space::XL,
+        };
         let measure = self.measure.clone();
         let scroll_view = cx.entity();
 
@@ -190,8 +227,7 @@ impl Render for MarkdownView {
                     v_flex()
                         .absolute()
                         .inset_0()
-                        .py(Space::XL)
-                        .px(Space::XL)
+                        .px(viewport_padding)
                         .child(
                             // A flow child measures the content box. An
                             // absolute one resolves `size_full` against the
@@ -315,24 +351,21 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
 
     match block.clone() {
         Block::Heading(level, text) => {
-            let ratio = match level {
-                1 => 2.875,
-                2 => 1.45,
-                3 => 1.18,
-                4 => 1.00,
-                _ => 0.92,
-            };
+            let (ratio, space_before, space_after) = heading_spec(level);
             v_flex()
                 .w(prose)
                 .mx_auto()
-                .mt((ed * 1.4))
-                .mb((ed * 0.5))
+                .mt(if level == 1 && index == 0 {
+                    px(0.)
+                } else {
+                    ed * space_before
+                })
+                .mb(ed * space_after)
                 .child(
                     div()
-                        .text_size((ed * ratio))
+                        .text_size(ed * ratio)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(level <= 2, |this| this.font_family("Times New Roman"))
-                        .when(level == 3, |this| this.text_color(c.accent))
                         .child(prose_text(index, text)),
                 )
                 .when(level <= 2, |this| {
@@ -355,25 +388,29 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
         Block::Paragraph(text) => div()
             .w(prose)
             .mx_auto()
-            .my((ed * 0.5))
+            .my(ed * 0.625)
             .text_size(ed)
-            .line_height((ed * 1.62))
+            .line_height(ed * 1.62)
             .child(prose_text(index, text))
             .into_any_element(),
         Block::ListItem(depth, text, checked) => h_flex()
             .w(prose)
             .mx_auto()
             .items_start()
-            .pl(px(8. + depth as f32 * 16.))
+            .pl(px(depth as f32 * 24.))
             .gap(Space::S)
             .child(
                 div()
-                    .w(px(14.))
+                    .w(px(16.))
                     .flex_none()
-                    .text_color(c.ink_secondary)
+                    .text_color(if checked == Some(true) {
+                        c.workflow_done
+                    } else {
+                        c.ink_secondary
+                    })
                     .child(match checked {
-                        Some(true) => "[x]",
-                        Some(false) => "[ ]",
+                        Some(true) => "\u{2611}",
+                        Some(false) => "\u{2610}",
                         None => match depth {
                             0 => "\u{2022}",
                             1 => "\u{25e6}",
@@ -389,7 +426,7 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
                     .flex_1()
                     .min_w(px(0.))
                     .text_size(ed)
-                    .line_height((ed * 1.55))
+                    .line_height(ed * 1.55)
                     .when(checked == Some(true), |this| {
                         this.text_color(c.ink_secondary).line_through()
                     })
@@ -399,76 +436,29 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
         // No `overflow_hidden` on either card: clipping a card whose rows are
         // sized by wrapped text collapses it to nothing inside the scrolling
         // document. The rounded corners lose their clip; the content stays.
-        Block::Code(language, text) => v_flex()
-            .w(bleed)
-            .mx_auto()
-            .my((ed * 1.25))
-            .rounded(Radius::CONTROL)
-            .border_1()
-            .border_color(c.border)
-            .child(
-                h_flex()
-                    .w_full()
-                    .px(Space::M)
-                    .py(Space::XS)
-                    .bg(c.raised)
-                    .text_size(micro)
-                    .text_color(c.ink_secondary)
-                    .child(SharedString::from(if language.is_empty() {
-                        "code".to_string()
-                    } else {
-                        language
-                    })),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .p(Space::M)
-                    .bg(c.panel)
-                    .font_family("JetBrains Mono")
-                    .text_size((ed * 0.92))
-                    .line_height((ed * 1.35))
-                    .children(text.lines().enumerate().map(|(index, line)| {
-                        h_flex()
-                            .child(
-                                div()
-                                    .w(px(36.))
-                                    .flex_none()
-                                    .pr(Space::S)
-                                    .text_right()
-                                    .text_color(c.ink_secondary.opacity(0.55))
-                                    .child(SharedString::from((index + 1).to_string())),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .child(SharedString::from(line.to_string())),
-                            )
-                    })),
-            )
-            .into_any_element(),
+        Block::Code(code) => render_code_block(index, code, c, bleed, ed, micro),
         Block::Quote(text) => h_flex()
             .w(prose)
             .mx_auto()
-            .my((ed * 1.25))
+            .my(ed * 1.25)
             .items_stretch()
             .child(div().w(px(3.)).flex_none().bg(c.accent))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.))
-                    .pl(Space::M)
+                    .pl(Space::L)
                     .italic()
                     .text_color(c.ink_secondary)
                     .text_size(ed)
+                    .line_height(ed * 1.62)
                     .child(prose_text(index, text)),
             )
             .into_any_element(),
         Block::Rule => h_flex()
             .w(prose)
             .mx_auto()
-            .my((ed * 1.75))
+            .my(ed * 1.75)
             .justify_center()
             .gap(Space::S)
             .child(dot(c.border))
@@ -512,9 +502,9 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
                         div()
                             .w(width(column))
                             .flex_none()
-                            .px(Space::M)
-                            .py(Space::S)
-                            .text_size(ed * 0.9)
+                            .p(Space::M)
+                            .text_size(ed * 0.90625)
+                            .line_height(ed * 0.90625 * 1.45)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(SharedString::from(cell))
                     }),
@@ -528,15 +518,175 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
                             div()
                                 .w(width(column))
                                 .flex_none()
-                                .px(Space::M)
-                                .py(Space::S)
-                                .text_size(ed * 0.9)
-                                .line_height(ed * 1.45)
+                                .p(Space::M)
+                                .text_size(ed * 0.90625)
+                                .line_height(ed * 0.90625 * 1.45)
                                 .child(SharedString::from(cell))
                         }))
                 }))
                 .into_any_element()
         }
+    }
+}
+
+fn heading_spec(level: u8) -> (f32, f32, f32) {
+    match level {
+        1 => (2.875, 3.5, 1.25),
+        2 => (1.75, 3.5, 1.25),
+        3 => (1.1875, 2., 0.75),
+        4 => (1., 2., 0.75),
+        _ => (0.9375, 2., 0.75),
+    }
+}
+
+fn render_code_block(
+    index: usize,
+    code: HighlightedCode,
+    c: &Colors,
+    width: Pixels,
+    editor_size: Pixels,
+    label_size: Pixels,
+) -> AnyElement {
+    let label = if code.language.is_empty() {
+        SharedString::from("code")
+    } else {
+        SharedString::from(code.language.clone())
+    };
+    let copy_value = SharedString::from(code.source.clone());
+    let spans = code
+        .highlighter
+        .spans_in(&code.source, 0..code.source.len(), &code.line_starts, c);
+
+    v_flex()
+        .w(width)
+        .mx_auto()
+        .my(editor_size * 1.25)
+        .rounded(Radius::CONTROL)
+        .border_1()
+        .border_color(c.border)
+        .child(
+            h_flex()
+                .w_full()
+                .justify_between()
+                .px(Space::M)
+                .py(Space::XS)
+                .bg(c.raised)
+                .text_size(label_size)
+                .text_color(c.ink_secondary)
+                .child(label)
+                .child(
+                    Clipboard::new(format!("markdown-code-copy-{index}"))
+                        .value(copy_value)
+                        .tooltip("Copy code"),
+                ),
+        )
+        .child(
+            v_flex()
+                .id(format!("markdown-code-scroll-{index}"))
+                .w_full()
+                .p(Space::M)
+                .bg(c.panel)
+                .font_family("JetBrains Mono")
+                .text_size(editor_size * 0.90625)
+                .line_height(editor_size * 0.90625 * 1.35)
+                .overflow_x_scrollbar()
+                .children(code.source.lines().enumerate().map(|(line_index, line)| {
+                    let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
+                        .get(&line_index)
+                        .map(|line_spans| {
+                            line_spans
+                                .iter()
+                                .filter(|span| span.start < span.end && span.end <= line.len())
+                                .map(|span| {
+                                    (
+                                        span.start..span.end,
+                                        HighlightStyle {
+                                            color: Some(span.color),
+                                            ..Default::default()
+                                        },
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    h_flex()
+                        .flex_none()
+                        .child(
+                            div()
+                                .w(px(36.))
+                                .flex_none()
+                                .pr(Space::S)
+                                .text_right()
+                                .text_color(c.ink_secondary.opacity(0.55))
+                                .child(SharedString::from((line_index + 1).to_string())),
+                        )
+                        .child(
+                            div().flex_none().whitespace_nowrap().child(
+                                StyledText::new(SharedString::from(line.to_string()))
+                                    .with_highlights(highlights),
+                            ),
+                        )
+                })),
+        )
+        .into_any_element()
+}
+
+fn fence_language(language: &str) -> Lang {
+    let normalized = language
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "rust" | "rs" => Lang::Rust,
+        "swift" => Lang::Swift,
+        "python" | "py" => Lang::Python,
+        "javascript" | "js" | "jsx" => Lang::JavaScript,
+        "typescript" | "ts" => Lang::TypeScript,
+        "tsx" => Lang::Tsx,
+        "json" | "jsonc" => Lang::Json,
+        "toml" => Lang::Toml,
+        "css" => Lang::Css,
+        "html" | "htm" => Lang::Html,
+        "bash" | "sh" | "shell" | "zsh" => Lang::Bash,
+        "yaml" | "yml" => Lang::Yaml,
+        _ => Lang::None,
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+
+    #[test]
+    fn heading_hierarchy_matches_the_rendering_spec() {
+        assert_eq!(heading_spec(1), (2.875, 3.5, 1.25));
+        assert_eq!(heading_spec(2), (1.75, 3.5, 1.25));
+        assert_eq!(heading_spec(3), (1.1875, 2., 0.75));
+        assert_eq!(heading_spec(6), (0.9375, 2., 0.75));
+    }
+
+    #[test]
+    fn fenced_language_aliases_use_the_shared_highlighter() {
+        assert_eq!(fence_language("rust"), Lang::Rust);
+        assert_eq!(fence_language("js title=demo"), Lang::JavaScript);
+        assert_eq!(fence_language("zsh"), Lang::Bash);
+        assert_eq!(fence_language("unknown"), Lang::None);
+    }
+
+    #[test]
+    fn supported_fenced_code_caches_syntax_spans() {
+        let code = HighlightedCode::new("rust".into(), "fn main() { let answer = 42; }".into());
+        let colors = Colors::for_test();
+        let spans = code.highlighter.spans_in(
+            &code.source,
+            0..code.source.len(),
+            &code.line_starts,
+            &colors,
+        );
+
+        assert!(spans.values().any(|line| !line.is_empty()));
     }
 }
 
@@ -612,7 +762,10 @@ fn parse(source: &str) -> Vec<Block> {
             }
             Event::End(TagEnd::CodeBlock) => {
                 if let Some(lang) = in_code.take() {
-                    blocks.push(Block::Code(lang, text.trim_end().to_string()));
+                    blocks.push(Block::Code(HighlightedCode::new(
+                        lang,
+                        text.trim_end().to_string(),
+                    )));
                 }
                 text.clear();
             }
@@ -711,7 +864,7 @@ pub fn parse_summary(source: &str) -> Vec<(&'static str, usize)> {
             Block::Heading(level, _) => ("heading", level as usize),
             Block::Paragraph(_) => ("paragraph", 0),
             Block::ListItem(depth, _, _) => ("list", depth),
-            Block::Code(_, text) => ("code", text.lines().count()),
+            Block::Code(code) => ("code", code.source.lines().count()),
             Block::Quote(_) => ("quote", 0),
             Block::Rule => ("rule", 0),
             Block::Table(rows) => ("table", rows.len()),
