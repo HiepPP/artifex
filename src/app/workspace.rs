@@ -597,7 +597,9 @@ impl Workspace {
             return;
         }
         self.tabs.remove(index);
-        if self.selected >= self.tabs.len() {
+        if index < self.selected {
+            self.selected -= 1;
+        } else if self.selected >= self.tabs.len() {
             self.selected = self.tabs.len().saturating_sub(1);
         }
     }

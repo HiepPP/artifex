@@ -471,6 +471,9 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Place the close control at the leading edge of a closable tab. A tab that
   cannot close carries no close slot at all, so it has no empty gutter. A close
   click must not also select or reopen the tab.
+- When the selected tab or workspace changes, move keyboard focus to its editor,
+  terminal, or diff surface. Read-only previews return focus to the shell. This
+  handoff also applies when closing or replacing the entity that owned focus.
 - Keep the final terminal tab open and non-closable.
 - Keep source/preview, wrap, search, and New Terminal in one trailing group.
   Render source/preview as labelled `Preview` and `Raw` controls for a file that

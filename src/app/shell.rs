@@ -75,6 +75,14 @@ pub enum SidebarTab {
     Git,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct ActiveSurface {
+    root: PathBuf,
+    tab_id: usize,
+    mode: Option<FileMode>,
+    entity: Option<EntityId>,
+}
+
 pub struct Shell {
     pub workspaces: Vec<Workspace>,
     pub active: usize,
@@ -103,6 +111,7 @@ pub struct Shell {
     /// and `Workspace: Rebuild File Index` stay the manual fallback.
     watch: Option<WatchHub>,
     focus: FocusHandle,
+    active_surface: Option<ActiveSurface>,
     /// Last session snapshot written to disk. Render compares against it so
     /// only a real state change costs a write.
     last_session: Option<session::SessionState>,
@@ -165,6 +174,7 @@ impl Shell {
             discard_armed: None,
             watch: WatchHub::new(),
             focus: cx.focus_handle(),
+            active_surface: None,
             last_session: None,
             last_settings: None,
             terminal_event_sources: HashSet::new(),
@@ -463,6 +473,39 @@ impl Shell {
             Some(TabKind::File { editor, .. }) => Some(editor.clone()),
             _ => None,
         }
+    }
+
+    fn active_surface(&self) -> Option<ActiveSurface> {
+        let workspace = self.workspaces.get(self.active)?;
+        let tab = workspace.selected_tab()?;
+        let (mode, entity) = match &tab.kind {
+            TabKind::Terminal(view) => (None, Some(view.entity_id())),
+            TabKind::File { editor, mode, .. } => (Some(*mode), Some(editor.entity_id())),
+            TabKind::Diff { view, .. } => (None, Some(view.entity_id())),
+            TabKind::Image { .. } | TabKind::Video { .. } | TabKind::ImageDiff { .. } => {
+                (None, None)
+            }
+        };
+        Some(ActiveSurface {
+            root: workspace.root.clone(),
+            tab_id: tab.id,
+            mode,
+            entity,
+        })
+    }
+
+    fn focus_active_surface(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = match self.workspace().selected_tab().map(|tab| &tab.kind) {
+            Some(TabKind::Terminal(view)) => Some(view.read(cx).focus_handle(cx)),
+            Some(TabKind::File {
+                editor,
+                mode: FileMode::Source,
+                ..
+            }) => Some(editor.read(cx).focus_handle(cx)),
+            Some(TabKind::Diff { view, .. }) => Some(view.read(cx).focus_handle(cx)),
+            _ => None,
+        };
+        window.focus(handle.as_ref().unwrap_or(&self.focus), cx);
     }
 
     /// Stages, commits and pushes, in that order. One path for the Git panel
@@ -1732,6 +1775,16 @@ impl Render for Shell {
         self.persist_session(cx);
         self.persist_settings(cx);
         self.sync_webviews(cx);
+        let active_surface = self.active_surface();
+        if active_surface != self.active_surface {
+            self.active_surface = active_surface;
+            let shell = cx.entity();
+            window.defer(cx, move |window, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.focus_active_surface(window, cx);
+                });
+            });
+        }
         let c = cx.tokens().c;
         let title_inset = theme::title_bar_inset(window);
         let width = f32::from(window.viewport_size().width) - f32::from(Metrics::RAIL_WIDTH);

@@ -18,10 +18,10 @@ use std::path::Path;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, HighlightStyle, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, SharedString, Styled as _, StyledText, UniformListScrollHandle, Window, canvas,
-    div, px, uniform_list,
+    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, HighlightStyle,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, SharedString, Styled as _, StyledText,
+    UniformListScrollHandle, Window, canvas, div, px, uniform_list,
 };
 use gpui_component::h_flex;
 use gpui_component::scroll::{Scrollbar, ScrollbarShow};
@@ -515,6 +515,12 @@ impl DiffView {
                 StyledText::new(SharedString::from(text.clone())).with_highlights(highlights),
             )))
             .into_any_element()
+    }
+}
+
+impl Focusable for DiffView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }
 
