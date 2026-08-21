@@ -26,13 +26,14 @@ impl Shell {
     }
 
     /// `DESIGN.md` > Center Tabs. Selected tab is one inset rounded pill of
-    /// warm glass; the close control sits at the leading edge and only shows on
-    /// the selected or hovered tab.
+    /// warm glass; when enabled, the close control sits at the leading edge and
+    /// only shows on the selected or hovered tab.
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
         let light = !cx.tokens().dark;
         let selected = self.workspace().selected;
+        let shows_tab_close_buttons = self.shows_tab_close_buttons;
         let workspace_name = self.workspace().name.clone();
         let selected_location = self.workspace().selected_tab().map_or_else(
             || "overview".to_string(),
@@ -199,7 +200,7 @@ impl Shell {
                                             .hover(|this| this.bg(c.hover))
                                             .active(|this| this.bg(c.pressed))
                                     })
-                                    .when(tab.closable, |this| {
+                                    .when(tab.closable && shows_tab_close_buttons, |this| {
                                         this.child(
                                             div()
                                                 .id(("close", index))

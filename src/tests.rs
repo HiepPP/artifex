@@ -1018,6 +1018,7 @@ fn settings_round_trip_normalizes_zoom_and_rejects_future_versions() {
     state.ui_zoom = 9.0;
     state.dark = Some(true);
     state.word_wrap = true;
+    state.shows_tab_close_buttons = false;
     settings::save_to(&state, &path);
 
     let loaded = settings::load_from(&path).expect("settings load back");
@@ -1027,6 +1028,7 @@ fn settings_round_trip_normalizes_zoom_and_rejects_future_versions() {
     assert!(loaded.ui_zoom == 1.4);
     assert!(loaded.dark == Some(true));
     assert!(loaded.word_wrap);
+    assert!(!loaded.shows_tab_close_buttons);
 
     fs::write(
         &path,
@@ -1036,6 +1038,7 @@ fn settings_round_trip_normalizes_zoom_and_rejects_future_versions() {
     let upgraded = settings::load_from(&path).expect("older settings get defaults");
     assert!(upgraded.content_zoom == 1.2);
     assert!(upgraded.ui_zoom == 1.0);
+    assert!(upgraded.shows_tab_close_buttons);
 
     state.version = 99;
     fs::write(&path, serde_json::to_string(&state).unwrap()).unwrap();

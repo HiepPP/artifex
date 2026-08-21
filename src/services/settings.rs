@@ -24,6 +24,8 @@ pub struct SettingsState {
     pub dark: Option<bool>,
     #[serde(default)]
     pub word_wrap: bool,
+    #[serde(default = "default_true")]
+    pub shows_tab_close_buttons: bool,
 }
 
 impl Default for SettingsState {
@@ -36,6 +38,7 @@ impl Default for SettingsState {
             ui_zoom: default_zoom(),
             dark: None,
             word_wrap: false,
+            shows_tab_close_buttons: true,
         }
     }
 }

@@ -11,6 +11,7 @@ pub struct QuickSettingsSnapshot {
     pub inspector_available: bool,
     pub dark: bool,
     pub word_wrap: bool,
+    pub shows_tab_close_buttons: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -35,11 +36,11 @@ mod macos {
     use crate::app::menu::Quit;
     use crate::app::shell::{
         ResetUiZoom, ResetZoom, ToggleAppearance, ToggleFocusMode, ToggleInspector, ToggleSidebar,
-        ToggleWrap, UiZoomIn, UiZoomOut, ZoomIn, ZoomOut,
+        ToggleTabCloseButtons, ToggleWrap, UiZoomIn, UiZoomOut, ZoomIn, ZoomOut,
     };
 
     const PANEL_WIDTH: f64 = 300.0;
-    const PANEL_HEIGHT: f64 = 454.0;
+    const PANEL_HEIGHT: f64 = 488.0;
     const CONTENT_X: f64 = 16.0;
     const CONTENT_WIDTH: f64 = PANEL_WIDTH - CONTENT_X * 2.0;
 
@@ -59,6 +60,7 @@ mod macos {
         ToggleSidebar,
         ToggleInspector,
         ToggleWrap,
+        ToggleTabCloseButtons,
         ToggleAppearance,
         ResetZoom,
         Quit,
@@ -76,6 +78,7 @@ mod macos {
         focus_mode: Retained<NSSwitch>,
         sidebar: Retained<NSSwitch>,
         inspector: Retained<NSSwitch>,
+        tab_close_buttons: Retained<NSSwitch>,
         word_wrap: Retained<NSSwitch>,
         dark_mode: Retained<NSSwitch>,
         reset_zoom: Retained<NSButton>,
@@ -182,6 +185,9 @@ mod macos {
             controls
                 .word_wrap
                 .setState(control_state(snapshot.word_wrap));
+            controls
+                .tab_close_buttons
+                .setState(control_state(snapshot.shows_tab_close_buttons));
             controls.sidebar.setEnabled(snapshot.sidebar_available);
             controls.inspector.setEnabled(snapshot.inspector_available);
         }
@@ -201,6 +207,7 @@ mod macos {
                 Self::Quit => 8,
                 Self::UiZoomOut => 9,
                 Self::UiZoomIn => 10,
+                Self::ToggleTabCloseButtons => 11,
             }
         }
 
@@ -217,6 +224,7 @@ mod macos {
                 8 => Some(Self::Quit),
                 9 => Some(Self::UiZoomOut),
                 10 => Some(Self::UiZoomIn),
+                11 => Some(Self::ToggleTabCloseButtons),
                 _ => None,
             }
         }
@@ -269,44 +277,49 @@ mod macos {
 
     fn build_controls(mtm: MainThreadMarker) -> QuickSettingsControls {
         QuickSettingsControls {
-            zoom_value: value_label("100%", frame(198.0, 386.0, 48.0, 28.0), mtm),
+            zoom_value: value_label("100%", frame(198.0, 420.0, 48.0, 28.0), mtm),
             zoom_out: action_button(
                 "-",
                 QuickAction::ZoomOut,
-                frame(164.0, 386.0, 28.0, 28.0),
+                frame(164.0, 420.0, 28.0, 28.0),
                 mtm,
             ),
             zoom_in: action_button(
                 "+",
                 QuickAction::ZoomIn,
-                frame(252.0, 386.0, 28.0, 28.0),
+                frame(252.0, 420.0, 28.0, 28.0),
                 mtm,
             ),
-            ui_zoom_value: value_label("100%", frame(198.0, 352.0, 48.0, 28.0), mtm),
+            ui_zoom_value: value_label("100%", frame(198.0, 386.0, 48.0, 28.0), mtm),
             ui_zoom_out: action_button(
                 "-",
                 QuickAction::UiZoomOut,
-                frame(164.0, 352.0, 28.0, 28.0),
+                frame(164.0, 386.0, 28.0, 28.0),
                 mtm,
             ),
             ui_zoom_in: action_button(
                 "+",
                 QuickAction::UiZoomIn,
-                frame(252.0, 352.0, 28.0, 28.0),
+                frame(252.0, 386.0, 28.0, 28.0),
                 mtm,
             ),
             focus_mode: toggle(
                 QuickAction::ToggleFocusMode,
-                frame(242.0, 275.0, 38.0, 24.0),
+                frame(242.0, 309.0, 38.0, 24.0),
                 mtm,
             ),
             sidebar: toggle(
                 QuickAction::ToggleSidebar,
-                frame(242.0, 241.0, 38.0, 24.0),
+                frame(242.0, 275.0, 38.0, 24.0),
                 mtm,
             ),
             inspector: toggle(
                 QuickAction::ToggleInspector,
+                frame(242.0, 241.0, 38.0, 24.0),
+                mtm,
+            ),
+            tab_close_buttons: toggle(
+                QuickAction::ToggleTabCloseButtons,
                 frame(242.0, 207.0, 38.0, 24.0),
                 mtm,
             ),
@@ -362,14 +375,15 @@ mod macos {
             frame(0.0, 0.0, PANEL_WIDTH, PANEL_HEIGHT),
         );
 
-        root.addSubview(&section_label("Text Size", 420.0, mtm));
-        root.addSubview(&row_label("Content", 390.0, mtm));
-        root.addSubview(&row_label("Interface", 356.0, mtm));
-        add_separator(&root, 338.0, mtm);
-        root.addSubview(&section_label("Display", 309.0, mtm));
-        root.addSubview(&row_label("Focus mode", 278.0, mtm));
-        root.addSubview(&row_label("Sidebar", 244.0, mtm));
-        root.addSubview(&row_label("Inspector", 210.0, mtm));
+        root.addSubview(&section_label("Text Size", 454.0, mtm));
+        root.addSubview(&row_label("Content", 424.0, mtm));
+        root.addSubview(&row_label("Interface", 390.0, mtm));
+        add_separator(&root, 372.0, mtm);
+        root.addSubview(&section_label("Display", 343.0, mtm));
+        root.addSubview(&row_label("Focus mode", 312.0, mtm));
+        root.addSubview(&row_label("Sidebar", 278.0, mtm));
+        root.addSubview(&row_label("Inspector", 244.0, mtm));
+        root.addSubview(&row_label("Tab close buttons", 210.0, mtm));
         add_separator(&root, 193.0, mtm);
         root.addSubview(&section_label("Code", 165.0, mtm));
         root.addSubview(&row_label("Word wrap", 134.0, mtm));
@@ -401,6 +415,7 @@ mod macos {
             &controls.focus_mode,
             &controls.sidebar,
             &controls.inspector,
+            &controls.tab_close_buttons,
             &controls.word_wrap,
             &controls.dark_mode,
         ] {
@@ -507,6 +522,7 @@ mod macos {
             QuickAction::ToggleSidebar => cx.dispatch_action(&ToggleSidebar),
             QuickAction::ToggleInspector => cx.dispatch_action(&ToggleInspector),
             QuickAction::ToggleWrap => cx.dispatch_action(&ToggleWrap),
+            QuickAction::ToggleTabCloseButtons => cx.dispatch_action(&ToggleTabCloseButtons),
             QuickAction::ToggleAppearance => cx.dispatch_action(&ToggleAppearance),
             QuickAction::ResetZoom => cx.dispatch_action(&ResetZoom),
             QuickAction::Quit => cx.dispatch_action(&Quit),
@@ -536,6 +552,7 @@ mod macos {
                 QuickAction::Quit,
                 QuickAction::UiZoomOut,
                 QuickAction::UiZoomIn,
+                QuickAction::ToggleTabCloseButtons,
             ];
 
             for action in actions {

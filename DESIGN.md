@@ -474,9 +474,10 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Mark a preview tab with italic label text at `0.72` opacity. Do not add another
   icon.
 - Double click a preview tab to promote it to a permanent tab.
-- Place the close control at the leading edge of a closable tab. A tab that
-  cannot close carries no close slot at all, so it has no empty gutter. A close
-  click must not also select or reopen the tab.
+- Place the close control at the leading edge of a closable tab when Tab close
+  buttons is enabled. A tab that cannot close, or any tab while the setting is
+  disabled, carries no close slot. A close click must not also select or reopen
+  the tab.
 - When the selected tab or workspace changes, move keyboard focus to its editor,
   terminal, or diff surface. Read-only previews return focus to the shell. This
   handoff also applies when closing or replacing the entity that owned focus.
@@ -829,8 +830,8 @@ Minimize, Full Screen, and Quit remain global actions.
 Artifex also shows one macOS status item with the `slider.horizontal.3` symbol.
 It opens a transient quick-settings panel with a fixed 300 point width. The
 vertical panel exposes Content from 80% through 200%, Interface from 80% through
-140%, focus mode, sidebar, inspector, word wrap, dark mode, reset text size, and
-Quit Artifex. The inspector
+140%, focus mode, sidebar, inspector, tab close buttons, word wrap, dark mode,
+reset text size, and Quit Artifex. The inspector
 control is unavailable outside the wide layout. Controls dispatch shared GPUI
 actions and stay open for repeated changes. `Shell` remains the only state owner
 and publishes the actual values back to AppKit after every render. The panel
@@ -951,7 +952,8 @@ Durable preferences live in
 open workspace session.
 
 - Stored: Content text scale, Interface text scale, light or dark appearance,
-  sidebar visibility, inspector visibility, and global word wrap.
+  sidebar visibility, inspector visibility, tab close button visibility, and
+  global word wrap.
 - Not stored: focus mode. It is a temporary concentration state and every launch
   starts with the normal panel layout.
 - `Shell` owns the live values. The AppKit panel only dispatches shared actions

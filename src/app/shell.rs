@@ -38,6 +38,7 @@ actions!(
         SaveFile,
         TogglePreview,
         ToggleWrap,
+        ToggleTabCloseButtons,
         ZoomIn,
         ZoomOut,
         ResetZoom,
@@ -100,6 +101,7 @@ pub struct Shell {
     pub ui_zoom: f32,
     pub dark: bool,
     pub word_wrap: bool,
+    pub shows_tab_close_buttons: bool,
     pub split: Entity<ResizableState>,
     pub overlay: OverlayState,
     pub status: Option<SharedString>,
@@ -153,6 +155,7 @@ impl Shell {
         };
         let zoom = preferences.content_zoom.clamp(0.8, 2.0);
         let ui_zoom = preferences.ui_zoom.clamp(0.8, 1.4);
+        let shows_tab_close_buttons = preferences.shows_tab_close_buttons;
         theme::set_editor_zoom(zoom, cx);
         theme::set_ui_zoom(ui_zoom, cx);
 
@@ -168,6 +171,7 @@ impl Shell {
             ui_zoom,
             dark,
             word_wrap: preferences.word_wrap,
+            shows_tab_close_buttons,
             split,
             overlay: OverlayState::default(),
             status: None,
@@ -297,6 +301,7 @@ impl Shell {
         state.ui_zoom = self.ui_zoom;
         state.dark = Some(self.dark);
         state.word_wrap = self.word_wrap;
+        state.shows_tab_close_buttons = self.shows_tab_close_buttons;
         state
     }
 
@@ -889,6 +894,16 @@ impl Shell {
         for workspace in &mut self.workspaces {
             workspace.toggle_wrap(self.word_wrap, cx);
         }
+        cx.notify();
+    }
+
+    fn on_toggle_tab_close_buttons(
+        &mut self,
+        _: &ToggleTabCloseButtons,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shows_tab_close_buttons = !self.shows_tab_close_buttons;
         cx.notify();
     }
 
@@ -1805,6 +1820,7 @@ impl Render for Shell {
             inspector_available: layout.allows_inspector() && !self.focus_mode,
             dark: self.dark,
             word_wrap: self.word_wrap,
+            shows_tab_close_buttons: self.shows_tab_close_buttons,
         });
 
         let show_sidebar = self.shows_sidebar && layout.allows_sidebar() && !self.focus_mode;
@@ -1838,6 +1854,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_insert_file_reference))
             .on_action(cx.listener(Self::on_toggle_preview))
             .on_action(cx.listener(Self::on_toggle_wrap))
+            .on_action(cx.listener(Self::on_toggle_tab_close_buttons))
             .on_action(cx.listener(Self::on_zoom_in))
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_reset_zoom))
