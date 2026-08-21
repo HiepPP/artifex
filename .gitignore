@@ -1,3 +1,6 @@
 /target
 /dist
 /.build_start
+
+# Local design references and audit captures, not part of the build
+app-design/
