@@ -595,8 +595,9 @@ should look the way its author saw it on GitHub.
   Markdown into `StyledText` runs. Each run carries its own font, so code
   spans take JetBrains Mono on a grey chip (`#818B98` at 12 percent, dark
   `#656C76` at 20 percent) padded by a space either side. Bold, italic,
-  strikethrough and link colour come from the same runs. Prose is not
-  selectable and links are not clickable; GitHub parity won over selection.
+  strikethrough and link colour come from the same runs. Prose is selectable:
+  drag paints the shared blue selection over the exact `StyledText` layout,
+  and `Cmd-C` copies the flattened inline text. Links remain non-clickable.
 - Soft line breaks join into spaces so a hard-wrapped source paragraph fills
   the measure. Two trailing spaces or a backslash keep a hard break. A blank
   line inside a list item keeps its paragraph break.
@@ -625,7 +626,8 @@ should look the way its author saw it on GitHub.
   a bold header without fill, every second body row on the subtle fill,
   square corners. Rows stretch their cells so the column borders span the
   full row height. Columns share the card width equally; GitHub sizes them
-  to content, which GPUI cannot do without definite widths.
+  to content, which GPUI cannot do without definite widths. Cell text joins
+  the document selection; copied columns use tabs and copied rows use newlines.
 - Block rhythm uses padding, never margin. The virtualised `list` measures
   the border box, so a margin is dropped from the item height and the next
   block paints into it.
@@ -633,10 +635,10 @@ should look the way its author saw it on GitHub.
   view owns parsing and scroll targets; the shell owns the surrounding rail.
   Clicking an outline item aligns that heading with the top of the reader.
 
-Divergence: Atelier renders one selectable native document. This build
-renders a tree of block elements; nothing in the preview is selectable.
-Mermaid figures, images, callouts, footnotes, and front-matter cards are not
-ported.
+Divergence: Atelier renders one selectable native document. This build keeps
+a virtualised tree of block elements. Prose and table cells are selectable
+across blocks; code cards retain their copy control. Mermaid figures, images,
+callouts, footnotes, and front-matter cards are not ported.
 
 ### Quick Open, Command Palette, and Search All Files
 

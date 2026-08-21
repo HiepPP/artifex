@@ -2,20 +2,23 @@
 //!
 //! Parses with `pulldown-cmark` and renders headings, prose, lists, tables,
 //! code cards and quotes as GPUI elements. Prose blocks (heading, paragraph,
-//! list item, quote) reparse their inline Markdown into `StyledText` runs so
-//! emphasis, links and mono code chips render with their own fonts. Nothing
-//! in the preview is selectable; GitHub rendering parity won over selection.
+//! list item, quote) reparse their inline Markdown into selectable
+//! `StyledText` runs, preserving the Primer fonts, colours and mono code chips.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, HighlightStyle, Hsla, IntoElement,
-    ListAlignment, ListOffset, ListState, ParentElement, Pixels, Render, SharedString,
-    ScrollHandle, Styled as _, StyledText, Window, canvas, div, list, px,
+    AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, Edges, Element, ElementId,
+    Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, HighlightStyle, Hsla,
+    InspectorElementId, IntoElement, KeyDownEvent, LayoutId, ListAlignment, ListOffset, ListState,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
+    Render, ScrollHandle, SharedString, StyledText, TextLayout, Window, canvas, div, list, point,
+    px, quad,
 };
 use gpui_component::clipboard::Clipboard;
 use gpui_component::scroll::Scrollbar;
@@ -105,6 +108,46 @@ enum Block {
     Table(Vec<Vec<String>>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ProsePosition {
+    block: usize,
+    byte: usize,
+}
+
+#[derive(Clone)]
+struct ProseLayout {
+    block: usize,
+    range_start: usize,
+    text: SharedString,
+    layout: TextLayout,
+    bounds: Bounds<Pixels>,
+}
+
+#[derive(Clone)]
+struct ProseRenderState {
+    layouts: Rc<RefCell<HashMap<(usize, usize), ProseLayout>>>,
+    selection: Option<(ProsePosition, ProsePosition)>,
+    selection_color: Hsla,
+}
+
+fn distance_to_bounds(point: Point<Pixels>, bounds: Bounds<Pixels>) -> f32 {
+    let dx = if point.x < bounds.left() {
+        bounds.left() - point.x
+    } else if point.x > bounds.right() {
+        point.x - bounds.right()
+    } else {
+        px(0.)
+    };
+    let dy = if point.y < bounds.top() {
+        bounds.top() - point.y
+    } else if point.y > bounds.bottom() {
+        point.y - bounds.bottom()
+    } else {
+        px(0.)
+    };
+    f32::from(dx).powi(2) + f32::from(dy).powi(2)
+}
+
 /// One heading in the "On This Page" rail.
 struct Heading {
     block: usize,
@@ -128,11 +171,9 @@ pub struct MarkdownView {
     headings: Vec<Heading>,
     active_heading: Option<usize>,
     links: Vec<PathBuf>,
-    /// Virtualised block list. Each prose block is now a `TextView`, far heavier
-    /// than the plain-text `div` it replaced: laying every block out on each
-    /// scroll frame dropped frames on long documents. `list` measures and paints
-    /// only the blocks in the viewport (plus overdraw), so the scroll cost
-    /// tracks the viewport, not the document length.
+    /// Virtualised block list. Styled prose and its selection layout are heavier
+    /// than a plain-text `div`; `list` measures and paints only the blocks in the
+    /// viewport (plus overdraw), so scroll cost tracks the viewport.
     list: ListState,
     /// Measured width of the document column.
     ///
@@ -144,11 +185,18 @@ pub struct MarkdownView {
     /// One horizontal scroll handle per code card, owned by the view so the
     /// scrollbar keeps a stable handle across virtualised re-renders.
     code_scrolls: RefCell<HashMap<usize, ScrollHandle>>,
+    /// Exact `StyledText` layouts for prose currently painted by the virtual
+    /// list. Mouse positions map back to byte offsets through these layouts.
+    prose_layouts: Rc<RefCell<HashMap<(usize, usize), ProseLayout>>>,
+    focus: FocusHandle,
+    selection_anchor: Option<ProsePosition>,
+    selection_head: Option<ProsePosition>,
+    dragging_selection: bool,
 }
 
 impl MarkdownView {
     pub fn open(path: PathBuf, cx: &mut App) -> Entity<Self> {
-        cx.new(|_| {
+        cx.new(|cx| {
             let mut view = Self {
                 path,
                 blocks: Vec::new(),
@@ -158,6 +206,11 @@ impl MarkdownView {
                 list: ListState::new(0, ListAlignment::Top, px(400.)),
                 measure: Rc::new(Cell::new(px(PROSE_WIDTH))),
                 code_scrolls: RefCell::new(HashMap::new()),
+                prose_layouts: Rc::new(RefCell::new(HashMap::new())),
+                focus: cx.focus_handle(),
+                selection_anchor: None,
+                selection_head: None,
+                dragging_selection: false,
             };
             view.reload();
             view
@@ -184,6 +237,10 @@ impl MarkdownView {
         // New block count, fresh (unmeasured) items.
         self.list.reset(self.blocks.len());
         self.code_scrolls.borrow_mut().clear();
+        self.prose_layouts.borrow_mut().clear();
+        self.selection_anchor = None;
+        self.selection_head = None;
+        self.dragging_selection = false;
         self.active_heading = active_heading_block(&self.headings, 0);
     }
 
@@ -230,9 +287,152 @@ impl MarkdownView {
         self.active_heading = block;
         cx.emit(ActiveHeadingChanged { block });
     }
+
+    fn selection(&self) -> Option<(ProsePosition, ProsePosition)> {
+        let anchor = self.selection_anchor?;
+        let head = self.selection_head?;
+        (anchor != head).then(|| {
+            if anchor <= head {
+                (anchor, head)
+            } else {
+                (head, anchor)
+            }
+        })
+    }
+
+    fn prose_position_at(&self, point: Point<Pixels>, strict: bool) -> Option<ProsePosition> {
+        let layouts = self.prose_layouts.borrow();
+        let mut layouts: Vec<&ProseLayout> = layouts.values().collect();
+        layouts.sort_by_key(|layout| (layout.block, layout.range_start));
+
+        let exact = layouts
+            .iter()
+            .copied()
+            .find(|layout| layout.bounds.contains(&point));
+        let layout = if let Some(layout) = exact {
+            layout
+        } else if strict {
+            return None;
+        } else {
+            let first = *layouts.first()?;
+            let last = *layouts.last()?;
+            if point.y < first.bounds.top() {
+                return Some(ProsePosition {
+                    block: first.block,
+                    byte: first.range_start,
+                });
+            }
+            if point.y > last.bounds.bottom() {
+                return Some(ProsePosition {
+                    block: last.block,
+                    byte: last.range_start + last.text.len(),
+                });
+            }
+            layouts
+                .iter()
+                .copied()
+                .min_by(|left, right| {
+                    distance_to_bounds(point, left.bounds)
+                        .total_cmp(&distance_to_bounds(point, right.bounds))
+                })?
+        };
+
+        let byte = layout
+            .layout
+            .index_for_position(point)
+            .unwrap_or_else(|nearest| nearest)
+            .min(layout.text.len())
+            + layout.range_start;
+        Some(ProsePosition {
+            block: layout.block,
+            byte,
+        })
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(position) = self.prose_position_at(event.position, true) else {
+            return;
+        };
+        self.selection_anchor = Some(position);
+        self.selection_head = Some(position);
+        self.dragging_selection = true;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.dragging_selection {
+            return;
+        }
+        if let Some(position) = self.prose_position_at(event.position, false) {
+            self.selection_head = Some(position);
+            cx.notify();
+        }
+    }
+
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.dragging_selection {
+            return;
+        }
+        if let Some(position) = self.prose_position_at(event.position, false) {
+            self.selection_head = Some(position);
+        }
+        self.dragging_selection = false;
+        if self.selection().is_none() {
+            self.selection_anchor = None;
+            self.selection_head = None;
+        }
+        cx.notify();
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !event.keystroke.modifiers.platform {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "c" => {
+                if let Some(text) = selected_prose_text(&self.blocks, self.selection()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            "a" => {
+                let first = self.blocks.iter().enumerate().find_map(|(block, item)| {
+                    block_selectable_text(item).map(|_| ProsePosition { block, byte: 0 })
+                });
+                let last = self
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(block, item)| {
+                        block_selectable_text(item).map(|text| ProsePosition {
+                            block,
+                            byte: text.len(),
+                        })
+                    });
+                if let (Some(first), Some(last)) = (first, last) {
+                    self.selection_anchor = Some(first);
+                    self.selection_head = Some(last);
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl EventEmitter<ActiveHeadingChanged> for MarkdownView {}
+
+impl Focusable for MarkdownView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
 
 impl Render for MarkdownView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -241,6 +441,8 @@ impl Render for MarkdownView {
         let zoom = cx.global::<EditorZoom>().0;
         let viewport_padding = VIEWPORT_PADDING;
         let measure = self.measure.clone();
+        self.prose_layouts.borrow_mut().clear();
+        let prose_layouts = self.prose_layouts.clone();
         let scroll_view = cx.entity();
 
         div()
@@ -249,7 +451,14 @@ impl Render for MarkdownView {
             .size_full()
             .bg(gh.bg)
             .text_color(gh.fg)
+            .track_focus(&self.focus)
+            .key_context("MarkdownPreview")
+            .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(move |_, window, cx| {
+                prose_layouts.borrow_mut().clear();
                 let scroll_view = scroll_view.clone();
                 window.defer(cx, move |_, cx| {
                     let _ = scroll_view.update(cx, |view, cx| {
@@ -289,7 +498,8 @@ impl Render for MarkdownView {
                         // is cloned into the closure each frame.
                         .child(
                             list(self.list.clone(), move |index, _window, cx| {
-                                let view = view.read(cx);
+                                let view_entity = view.clone();
+                                let view = view_entity.read(cx);
                                 match view.blocks.get(index) {
                                     Some(block) => {
                                         let scroll = matches!(block, Block::Code(_)).then(|| {
@@ -299,6 +509,11 @@ impl Render for MarkdownView {
                                                 .or_default()
                                                 .clone()
                                         });
+                                        let prose_state = ProseRenderState {
+                                            layouts: view.prose_layouts.clone(),
+                                            selection: view.selection(),
+                                            selection_color: colors.text_selection.opacity(0.22),
+                                        };
                                         render_block(
                                             index,
                                             block,
@@ -307,6 +522,7 @@ impl Render for MarkdownView {
                                             view.measure.get(),
                                             zoom,
                                             scroll,
+                                            &prose_state,
                                         )
                                     }
                                     None => div().into_any_element(),
@@ -350,6 +566,49 @@ mod outline_tests {
         assert_eq!(active_heading_block(&headings, 7), Some(3));
         assert_eq!(active_heading_block(&headings, 8), Some(8));
     }
+
+    #[test]
+    fn selection_flattens_inline_markdown_across_prose_blocks() {
+        let blocks = vec![
+            Block::Heading(1, "Hello **world**".to_string()),
+            Block::Paragraph("Second line".to_string()),
+        ];
+        let selection = Some((
+            ProsePosition { block: 0, byte: 6 },
+            ProsePosition { block: 1, byte: 6 },
+        ));
+
+        assert_eq!(
+            selected_prose_text(&blocks, selection).as_deref(),
+            Some("world\nSecond")
+        );
+    }
+
+    #[test]
+    fn selection_flattens_table_as_tsv_without_wrap_hints() {
+        let rows = vec![
+            vec!["Gate".to_string(), "Verdict".to_string()],
+            vec!["Viet\u{200b}namese".to_string(), "Go".to_string()],
+        ];
+        let text = table_text(&rows);
+        let blocks = vec![Block::Table(rows.clone())];
+        let selection = Some((
+            ProsePosition { block: 0, byte: 0 },
+            ProsePosition {
+                block: 0,
+                byte: text.len(),
+            },
+        ));
+
+        assert_eq!(
+            table_cell_ranges(&rows),
+            vec![vec![0..4, 5..12], vec![13..26, 27..29]]
+        );
+        assert_eq!(
+            selected_prose_text(&blocks, selection).as_deref(),
+            Some("Gate\tVerdict\nVietnamese\tGo")
+        );
+    }
 }
 
 fn local_links(source: &str, document: &Path) -> Vec<PathBuf> {
@@ -377,19 +636,91 @@ fn local_links(source: &str, document: &Path) -> Vec<PathBuf> {
     links
 }
 
-/// Inline Markdown as one wrapped `StyledText` with per-run fonts. Each run
-/// carries its own `Font`, so a code span takes the mono face and a padded
-/// chip fill, which `TextView` could not do. Selection across prose is the
-/// price; the document is read far more than copied.
+fn block_inline_source(block: &Block) -> Option<&str> {
+    match block {
+        Block::Heading(_, text)
+        | Block::Paragraph(text)
+        | Block::ListItem(_, text, _, _)
+        | Block::Quote(text) => Some(text),
+        Block::Code(_) | Block::Rule | Block::Table(_) => None,
+    }
+}
+
+fn flat_inline_text(source: &str) -> String {
+    let gh = gh_palette(false);
+    inline_runs(source, &gh, gh.fg, gh.fg, gpui::FontWeight::NORMAL).0
+}
+
+fn table_text(rows: &[Vec<String>]) -> String {
+    rows.iter()
+        .map(|row| row.join("\t"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn block_selectable_text(block: &Block) -> Option<String> {
+    if let Some(source) = block_inline_source(block) {
+        return Some(flat_inline_text(source));
+    }
+    match block {
+        Block::Table(rows) => Some(table_text(rows)),
+        Block::Code(_) | Block::Rule => None,
+        Block::Heading(_, _)
+        | Block::Paragraph(_)
+        | Block::ListItem(_, _, _, _)
+        | Block::Quote(_) => None,
+    }
+}
+
+fn selected_prose_text(
+    blocks: &[Block],
+    selection: Option<(ProsePosition, ProsePosition)>,
+) -> Option<String> {
+    let selection = selection?;
+    let mut selected = Vec::new();
+    for (block, item) in blocks.iter().enumerate() {
+        let Some(text) = block_selectable_text(item) else {
+            continue;
+        };
+        let Some(range) = prose_selection_range(block, text.len(), Some(selection)) else {
+            continue;
+        };
+        let Some(part) = text.get(range) else {
+            continue;
+        };
+        selected.push(part.replace('\u{200b}', ""));
+    }
+    (!selected.is_empty()).then(|| selected.join("\n"))
+}
+
+/// Inline Markdown as one selectable, wrapped `StyledText` with per-run fonts.
+/// Selection is painted from the exact `TextLayout`, so enabling it does not
+/// replace or restyle the Primer rendering.
 fn prose_text(
+    index: usize,
     text: String,
     gh: &Gh,
     color: Hsla,
     link: Hsla,
     weight: gpui::FontWeight,
+    state: &ProseRenderState,
 ) -> impl IntoElement {
     let (flat, runs) = inline_runs(&text, gh, color, link, weight);
-    StyledText::new(SharedString::from(flat)).with_runs(runs)
+    let text = SharedString::from(flat);
+    let range = 0..text.len();
+    let selection = selection_range_for_segment(index, &range, state.selection);
+    let styled_text = StyledText::new(text.clone()).with_runs(runs);
+    div()
+        .w_full()
+        .cursor_text()
+        .child(SelectableStyledText::new(
+            index,
+            range,
+            text,
+            styled_text,
+            state,
+            selection,
+        ))
 }
 
 fn inline_runs(
@@ -474,6 +805,247 @@ fn inline_runs(
     (flat, runs)
 }
 
+struct SelectableStyledText {
+    id: ElementId,
+    block: usize,
+    range_start: usize,
+    text: SharedString,
+    styled_text: StyledText,
+    layouts: Rc<RefCell<HashMap<(usize, usize), ProseLayout>>>,
+    selection: Option<Range<usize>>,
+    selection_color: Hsla,
+}
+
+impl SelectableStyledText {
+    fn new(
+        block: usize,
+        range: Range<usize>,
+        text: SharedString,
+        styled_text: StyledText,
+        state: &ProseRenderState,
+        selection: Option<Range<usize>>,
+    ) -> Self {
+        Self {
+            id: ElementId::Name(format!("markdown-selectable-{block}-{}", range.start).into()),
+            block,
+            range_start: range.start,
+            text,
+            styled_text,
+            layouts: state.layouts.clone(),
+            selection,
+            selection_color: state.selection_color,
+        }
+    }
+
+    fn paint_selection(
+        selection: &Range<usize>,
+        layout: &TextLayout,
+        bounds: Bounds<Pixels>,
+        color: Hsla,
+        window: &mut Window,
+    ) {
+        let Some(start) = layout.position_for_index(selection.start) else {
+            return;
+        };
+        let Some(end) = layout.position_for_index(selection.end) else {
+            return;
+        };
+        let line_height = layout.line_height();
+        if start.y == end.y {
+            window.paint_quad(quad(
+                Bounds::from_corners(start, point(end.x, end.y + line_height)),
+                px(0.),
+                color,
+                Edges::default(),
+                gpui::transparent_black(),
+                BorderStyle::default(),
+            ));
+            return;
+        }
+
+        window.paint_quad(quad(
+            Bounds::from_corners(start, point(bounds.right(), start.y + line_height)),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+        if end.y > start.y + line_height {
+            window.paint_quad(quad(
+                Bounds::from_corners(
+                    point(bounds.left(), start.y + line_height),
+                    point(bounds.right(), end.y),
+                ),
+                px(0.),
+                color,
+                Edges::default(),
+                gpui::transparent_black(),
+                BorderStyle::default(),
+            ));
+        }
+        window.paint_quad(quad(
+            Bounds::from_corners(
+                point(bounds.left(), end.y),
+                point(end.x, end.y + line_height),
+            ),
+            px(0.),
+            color,
+            Edges::default(),
+            gpui::transparent_black(),
+            BorderStyle::default(),
+        ));
+    }
+}
+
+impl IntoElement for SelectableStyledText {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for SelectableStyledText {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        Some(self.id.clone())
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.styled_text
+            .request_layout(global_id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.styled_text
+            .prepaint(global_id, inspector_id, bounds, request_layout, window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let layout = self.styled_text.layout().clone();
+        self.layouts.borrow_mut().insert(
+            (self.block, self.range_start),
+            ProseLayout {
+                block: self.block,
+                range_start: self.range_start,
+                text: self.text.clone(),
+                layout: layout.clone(),
+                bounds,
+            },
+        );
+        self.styled_text.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        );
+        if let Some(selection) = &self.selection {
+            Self::paint_selection(selection, &layout, bounds, self.selection_color, window);
+        }
+    }
+}
+
+fn prose_selection_range(
+    block: usize,
+    len: usize,
+    selection: Option<(ProsePosition, ProsePosition)>,
+) -> Option<Range<usize>> {
+    selection_range_for_segment(block, &(0..len), selection)
+}
+
+fn selection_range_for_segment(
+    block: usize,
+    segment: &Range<usize>,
+    selection: Option<(ProsePosition, ProsePosition)>,
+) -> Option<Range<usize>> {
+    let (start, end) = selection?;
+    if block < start.block || block > end.block {
+        return None;
+    }
+    let start = if block == start.block {
+        start.byte.max(segment.start)
+    } else {
+        segment.start
+    };
+    let end = if block == end.block {
+        end.byte.min(segment.end)
+    } else {
+        segment.end
+    };
+    if end <= start || start >= segment.end {
+        return None;
+    }
+    Some((start - segment.start)..(end - segment.start))
+}
+
+fn table_cell_ranges(rows: &[Vec<String>]) -> Vec<Vec<Range<usize>>> {
+    let mut cursor = 0;
+    rows.iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            if row_index > 0 {
+                cursor += 1;
+            }
+            row.iter()
+                .enumerate()
+                .map(|(column, cell)| {
+                    if column > 0 {
+                        cursor += 1;
+                    }
+                    let start = cursor;
+                    cursor += cell.len();
+                    start..cursor
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn table_cell_text(
+    block: usize,
+    range: Range<usize>,
+    text: String,
+    state: &ProseRenderState,
+) -> SelectableStyledText {
+    let text = SharedString::from(text);
+    let selection = selection_range_for_segment(block, &range, state.selection);
+    let styled_text = StyledText::new(text.clone());
+    SelectableStyledText::new(block, range, text, styled_text, state, selection)
+}
+
 fn render_block(
     index: usize,
     block: &Block,
@@ -482,6 +1054,7 @@ fn render_block(
     measure: Pixels,
     zoom: f32,
     scroll: Option<ScrollHandle>,
+    prose_state: &ProseRenderState,
 ) -> AnyElement {
     // Definite widths, not `w_full` plus `max_w`. Text is measured against the
     // width the parent proposes, which is the full column, and the maximum is
@@ -527,11 +1100,13 @@ fn render_block(
                         .line_height(size * 1.25)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(prose_text(
+                            index,
                             text,
                             gh,
                             if level == 6 { gh.muted } else { gh.fg },
                             c.link,
                             gpui::FontWeight::SEMIBOLD,
+                            prose_state,
                         )),
                 )
                 .into_any_element()
@@ -542,7 +1117,15 @@ fn render_block(
             .pb(ed)
             .text_size(ed)
             .line_height(ed * 1.6)
-            .child(prose_text(text, gh, gh.fg, c.link, gpui::FontWeight::NORMAL))
+            .child(prose_text(
+                index,
+                text,
+                gh,
+                gh.fg,
+                c.link,
+                gpui::FontWeight::NORMAL,
+                prose_state,
+            ))
             .into_any_element(),
         Block::ListItem(depth, text, checked, ordinal) => h_flex()
             .w(prose)
@@ -613,7 +1196,15 @@ fn render_block(
                     .min_w(px(0.))
                     .text_size(ed)
                     .line_height(ed * 1.6)
-                    .child(prose_text(text, gh, gh.fg, c.link, gpui::FontWeight::NORMAL)),
+                    .child(prose_text(
+                        index,
+                        text,
+                        gh,
+                        gh.fg,
+                        c.link,
+                        gpui::FontWeight::NORMAL,
+                        prose_state,
+                    )),
             )
             .into_any_element(),
         // No `overflow_hidden` on either card: clipping a card whose rows are
@@ -637,7 +1228,15 @@ fn render_block(
                     .pl(ed)
                     .text_size(ed)
                     .line_height(ed * 1.6)
-                    .child(prose_text(text, gh, gh.muted, c.link, gpui::FontWeight::NORMAL)),
+                    .child(prose_text(
+                        index,
+                        text,
+                        gh,
+                        gh.muted,
+                        c.link,
+                        gpui::FontWeight::NORMAL,
+                        prose_state,
+                    )),
             )
             .into_any_element(),
         // GitHub: a 0.25em solid bar with 24 points of vertical margin.
@@ -648,16 +1247,22 @@ fn render_block(
             .child(div().w_full().h(px(4.)).bg(gh.border))
             .into_any_element(),
         Block::Table(rows) => {
-            let mut iter = rows.into_iter();
-            let header = iter.next().unwrap_or_default();
-            let body: Vec<Vec<String>> = iter.collect();
+            let ranges = table_cell_ranges(&rows);
+            let mut iter = rows.into_iter().zip(ranges);
+            let (header, header_ranges) = iter.next().unwrap_or_default();
+            let body: Vec<(Vec<String>, Vec<Range<usize>>)> = iter.collect();
             // Each column takes a definite share of the card. A flex-sized cell
             // has no intrinsic width to grow from, so the row collapses and the
             // whole table disappears.
 
             let columns = header
                 .len()
-                .max(body.iter().map(Vec::len).max().unwrap_or(0))
+                .max(
+                    body.iter()
+                        .map(|(row, _)| row.len())
+                        .max()
+                        .unwrap_or(0),
+                )
                 .max(1);
             // Definite pixel widths, resolved from the card the cells sit in,
             // not from the document column. The card stops growing at
@@ -682,37 +1287,56 @@ fn render_block(
                     .py(px(9.))
                     .text_size(ed)
                     .line_height(ed * 1.5)
+                    .cursor_text()
                     .when(column > 0, |this| {
                         this.border_l_1().border_color(gh.border)
                     })
             };
-            div().w(px(card)).mx_auto().pb(ed).child(
-            v_flex()
-                .w_full()
-                .flex_none()
-                .border_1()
-                .border_color(gh.border)
-                .child(h_flex().w_full().items_stretch().children(
-                    header.into_iter().enumerate().map(|(column, cell)| {
-                        cell_style(div(), column)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(SharedString::from(cell))
-                    }),
-                ))
-                .children(body.into_iter().enumerate().map(|(index, row)| {
-                    // `items_stretch`: a cell sized to its own text leaves the
-                    // column border one line tall; stretched cells carry the
-                    // border the full row height like a real table grid.
-                    h_flex()
+            div()
+                .w(px(card))
+                .mx_auto()
+                .pb(ed)
+                .child(
+                    v_flex()
                         .w_full()
-                        .items_stretch()
-                        .border_t_1()
+                        .flex_none()
+                        .border_1()
                         .border_color(gh.border)
-                        .when(index % 2 == 1, |this| this.bg(gh.alt_row))
-                        .children(row.into_iter().enumerate().map(|(column, cell)| {
-                            cell_style(div(), column).child(SharedString::from(cell))
-                        }))
-                })))
+                        .child(h_flex().w_full().items_stretch().children(
+                            header
+                                .into_iter()
+                                .zip(header_ranges)
+                                .enumerate()
+                                .map(|(column, (cell, range))| {
+                                    cell_style(div(), column)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(table_cell_text(index, range, cell, prose_state))
+                                }),
+                        ))
+                        .children(body.into_iter().enumerate().map(
+                            |(row_index, (row, ranges))| {
+                                // `items_stretch`: a cell sized to its own text leaves the
+                                // column border one line tall; stretched cells carry the
+                                // border the full row height like a real table grid.
+                                h_flex()
+                                    .w_full()
+                                    .items_stretch()
+                                    .border_t_1()
+                                    .border_color(gh.border)
+                                    .when(row_index % 2 == 1, |this| this.bg(gh.alt_row))
+                                    .children(row.into_iter().zip(ranges).enumerate().map(
+                                        |(column, (cell, range))| {
+                                            cell_style(div(), column).child(table_cell_text(
+                                                index,
+                                                range,
+                                                cell,
+                                                prose_state,
+                                            ))
+                                        },
+                                    ))
+                            },
+                        )),
+                )
                 .into_any_element()
         }
     }
