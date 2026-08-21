@@ -2,41 +2,81 @@
 //!
 //! Parses with `pulldown-cmark` and renders headings, prose, lists, tables,
 //! code cards and quotes as GPUI elements. Prose blocks (heading, paragraph,
-//! list item, quote) render through `gpui_component::text::TextView`, which
-//! registers with the window-level selection system, so a drag across them
-//! selects text and `cmd-c` copies it. That reparse also restores inline
-//! emphasis, which the plain-text render used to drop. Code cards and tables
-//! keep their bespoke layout and stay non-selectable for now.
+//! list item, quote) reparse their inline Markdown into `StyledText` runs so
+//! emphasis, links and mono code chips render with their own fonts. Nothing
+//! in the preview is selectable; GitHub rendering parity won over selection.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, HighlightStyle, IntoElement, ListAlignment,
-    ListOffset, ListState, ParentElement, Pixels, Render, SharedString, Styled as _, StyledText,
-    Window, canvas, div, list, px, rems,
+    AnyElement, App, Context, Entity, EventEmitter, HighlightStyle, Hsla, IntoElement,
+    ListAlignment, ListOffset, ListState, ParentElement, Pixels, Render, SharedString,
+    ScrollHandle, Styled as _, StyledText, Window, canvas, div, list, px,
 };
 use gpui_component::clipboard::Clipboard;
-use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::text::{TextView, TextViewStyle};
+use gpui_component::scroll::Scrollbar;
 use gpui_component::{h_flex, v_flex};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::services::highlight::{Highlighter, Lang, line_starts};
-use crate::theme::{
-    ActiveTokens as _, Colors, EditorZoom, LayoutMode, Metrics, Radius, Space, Type,
-};
+use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Space, Type};
 
-/// `DESIGN.md` > documentMaxWidth / documentBleedMaxWidth.
-const PROSE_WIDTH: f32 = 720.;
-const BLEED_WIDTH: f32 = 880.;
-const WIDE_VIEWPORT_PADDING: Pixels = px(48.);
+/// GitHub renders `.markdown-body` on a 980-point measure with 32 points of
+/// padding; every block, including tables and code, shares the one column.
+const PROSE_WIDTH: f32 = 980.;
+const BLEED_WIDTH: f32 = PROSE_WIDTH;
+const VIEWPORT_PADDING: Pixels = px(32.);
+
+/// GitHub Primer markdown palette. The preview matches github.com instead of
+/// the application tokens, in light and dark.
+#[derive(Clone, Copy)]
+struct Gh {
+    bg: Hsla,
+    fg: Hsla,
+    muted: Hsla,
+    border: Hsla,
+    code_bg: Hsla,
+    alt_row: Hsla,
+    checked: Hsla,
+    chip: Hsla,
+}
+
+fn gh_palette(dark: bool) -> Gh {
+    fn c(value: u32) -> Hsla {
+        let rgba: gpui::Rgba = gpui::rgb(value);
+        rgba.into()
+    }
+    if dark {
+        Gh {
+            bg: c(0x0D1117),
+            fg: c(0xF0F6FC),
+            muted: c(0x9198A1),
+            border: c(0x3D444D),
+            code_bg: c(0x151B23),
+            alt_row: c(0x151B23),
+            checked: c(0x4493F8),
+            chip: c(0x656C76).opacity(0.2),
+        }
+    } else {
+        Gh {
+            bg: c(0xFFFFFF),
+            fg: c(0x1F2328),
+            muted: c(0x59636E),
+            border: c(0xD1D9E0),
+            code_bg: c(0xF6F8FA),
+            alt_row: c(0xF6F8FA),
+            checked: c(0x0969DA),
+            chip: c(0x818B98).opacity(0.12),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct HighlightedCode {
-    language: String,
     source: String,
     highlighter: Rc<Highlighter>,
     line_starts: Rc<Vec<usize>>,
@@ -47,7 +87,6 @@ impl HighlightedCode {
         let mut highlighter = Highlighter::new(fence_language(&language));
         highlighter.parse(&source);
         Self {
-            language,
             line_starts: Rc::new(line_starts(&source)),
             source,
             highlighter: Rc::new(highlighter),
@@ -59,7 +98,7 @@ impl HighlightedCode {
 enum Block {
     Heading(u8, String),
     Paragraph(String),
-    ListItem(usize, String, Option<bool>),
+    ListItem(usize, String, Option<bool>, Option<u64>),
     Code(HighlightedCode),
     Quote(String),
     Rule,
@@ -102,6 +141,9 @@ pub struct MarkdownView {
     /// height and the table disappears. The measure arrives one frame late,
     /// which is why it starts at the prose measure instead of zero.
     measure: Rc<Cell<Pixels>>,
+    /// One horizontal scroll handle per code card, owned by the view so the
+    /// scrollbar keeps a stable handle across virtualised re-renders.
+    code_scrolls: RefCell<HashMap<usize, ScrollHandle>>,
 }
 
 impl MarkdownView {
@@ -115,6 +157,7 @@ impl MarkdownView {
                 links: Vec::new(),
                 list: ListState::new(0, ListAlignment::Top, px(400.)),
                 measure: Rc::new(Cell::new(px(PROSE_WIDTH))),
+                code_scrolls: RefCell::new(HashMap::new()),
             };
             view.reload();
             view
@@ -140,6 +183,7 @@ impl MarkdownView {
             .collect();
         // New block count, fresh (unmeasured) items.
         self.list.reset(self.blocks.len());
+        self.code_scrolls.borrow_mut().clear();
         self.active_heading = active_heading_block(&self.headings, 0);
     }
 
@@ -191,15 +235,11 @@ impl MarkdownView {
 impl EventEmitter<ActiveHeadingChanged> for MarkdownView {}
 
 impl Render for MarkdownView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
+        let gh = gh_palette(cx.tokens().dark);
         let zoom = cx.global::<EditorZoom>().0;
-        let window_width = f32::from(window.viewport_size().width) - f32::from(Metrics::RAIL_WIDTH);
-        let viewport_padding = match LayoutMode::for_width(window_width) {
-            LayoutMode::Wide => WIDE_VIEWPORT_PADDING,
-            LayoutMode::Standard => Space::XXL,
-            LayoutMode::Compact => Space::XL,
-        };
+        let viewport_padding = VIEWPORT_PADDING;
         let measure = self.measure.clone();
         let scroll_view = cx.entity();
 
@@ -207,7 +247,8 @@ impl Render for MarkdownView {
             .flex()
             .flex_row()
             .size_full()
-            .bg(c.editor)
+            .bg(gh.bg)
+            .text_color(gh.fg)
             .on_scroll_wheel(move |_, window, cx| {
                 let scroll_view = scroll_view.clone();
                 window.defer(cx, move |_, cx| {
@@ -228,6 +269,7 @@ impl Render for MarkdownView {
                         .absolute()
                         .inset_0()
                         .px(viewport_padding)
+                        .pt(viewport_padding)
                         .child(
                             // A flow child measures the content box. An
                             // absolute one resolves `size_full` against the
@@ -249,13 +291,24 @@ impl Render for MarkdownView {
                             list(self.list.clone(), move |index, _window, cx| {
                                 let view = view.read(cx);
                                 match view.blocks.get(index) {
-                                    Some(block) => render_block(
-                                        index,
-                                        block,
-                                        &colors,
-                                        view.measure.get(),
-                                        zoom,
-                                    ),
+                                    Some(block) => {
+                                        let scroll = matches!(block, Block::Code(_)).then(|| {
+                                            view.code_scrolls
+                                                .borrow_mut()
+                                                .entry(index)
+                                                .or_default()
+                                                .clone()
+                                        });
+                                        render_block(
+                                            index,
+                                            block,
+                                            &colors,
+                                            &gh,
+                                            view.measure.get(),
+                                            zoom,
+                                            scroll,
+                                        )
+                                    }
                                     None => div().into_any_element(),
                                 }
                             })
@@ -324,19 +377,112 @@ fn local_links(source: &str, document: &Path) -> Vec<PathBuf> {
     links
 }
 
-/// A selectable, formatted rendering of one prose block's inline Markdown.
-///
-/// The surrounding block sets the type token, color and measure; the body text
-/// inherits those through the window text style. `paragraph_gap` is zeroed
-/// because each block holds exactly one paragraph, so the kit's default trailing
-/// gap would only add stray space under the block.
-fn prose_text(index: usize, text: String) -> impl IntoElement {
-    TextView::markdown(("md-prose", index), SharedString::from(text))
-        .selectable(true)
-        .style(TextViewStyle::default().paragraph_gap(rems(0.)))
+/// Inline Markdown as one wrapped `StyledText` with per-run fonts. Each run
+/// carries its own `Font`, so a code span takes the mono face and a padded
+/// chip fill, which `TextView` could not do. Selection across prose is the
+/// price; the document is read far more than copied.
+fn prose_text(
+    text: String,
+    gh: &Gh,
+    color: Hsla,
+    link: Hsla,
+    weight: gpui::FontWeight,
+) -> impl IntoElement {
+    let (flat, runs) = inline_runs(&text, gh, color, link, weight);
+    StyledText::new(SharedString::from(flat)).with_runs(runs)
 }
 
-fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: f32) -> AnyElement {
+fn inline_runs(
+    source: &str,
+    gh: &Gh,
+    color: Hsla,
+    link: Hsla,
+    weight: gpui::FontWeight,
+) -> (String, Vec<gpui::TextRun>) {
+    use gpui::{FontStyle, FontWeight, StrikethroughStyle, TextRun, font};
+
+    let mut flat = String::with_capacity(source.len() + 8);
+    let mut runs: Vec<TextRun> = Vec::new();
+    let (mut bold, mut italic, mut strike, mut in_link) = (false, false, false, false);
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    for event in Parser::new_ext(source, options) {
+        let (chunk, code): (String, bool) = match event {
+            Event::Start(Tag::Strong) => {
+                bold = true;
+                continue;
+            }
+            Event::End(TagEnd::Strong) => {
+                bold = false;
+                continue;
+            }
+            Event::Start(Tag::Emphasis) => {
+                italic = true;
+                continue;
+            }
+            Event::End(TagEnd::Emphasis) => {
+                italic = false;
+                continue;
+            }
+            Event::Start(Tag::Strikethrough) => {
+                strike = true;
+                continue;
+            }
+            Event::End(TagEnd::Strikethrough) => {
+                strike = false;
+                continue;
+            }
+            Event::Start(Tag::Link { .. }) => {
+                in_link = true;
+                continue;
+            }
+            Event::End(TagEnd::Link) => {
+                in_link = false;
+                continue;
+            }
+            Event::Text(text) => (text.to_string(), false),
+            // Spaces inside the run give the chip its horizontal padding.
+            Event::Code(text) => (format!(" {text} "), true),
+            Event::SoftBreak => (" ".to_string(), false),
+            Event::HardBreak => ("\n".to_string(), false),
+            _ => continue,
+        };
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut face = if code {
+            font("JetBrains Mono")
+        } else {
+            font(".SystemUIFont")
+        };
+        face.weight = if bold && !code { FontWeight::BOLD } else { weight };
+        face.style = if italic && !code { FontStyle::Italic } else { FontStyle::Normal };
+        runs.push(TextRun {
+            len: chunk.len(),
+            font: face,
+            color: if in_link { link } else { color },
+            background_color: code.then_some(gh.chip),
+            underline: None,
+            strikethrough: strike.then(|| StrikethroughStyle {
+                thickness: px(1.),
+                color: Some(color),
+            }),
+        });
+        flat.push_str(&chunk);
+    }
+    (flat, runs)
+}
+
+fn render_block(
+    index: usize,
+    block: &Block,
+    c: &Colors,
+    gh: &Gh,
+    measure: Pixels,
+    zoom: f32,
+    scroll: Option<ScrollHandle>,
+) -> AnyElement {
     // Definite widths, not `w_full` plus `max_w`. Text is measured against the
     // width the parent proposes, which is the full column, and the maximum is
     // applied afterwards. A paragraph that wraps to two lines at 640 points
@@ -347,77 +493,117 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
     // Zoom scales the type and the rhythm derived from it; the column widths
     // and structural padding stay fixed, so bigger text simply wraps sooner.
     let ed = Type::EDITOR * zoom;
-    let micro = Type::MICRO * zoom;
 
     match block.clone() {
         Block::Heading(level, text) => {
-            let (ratio, space_before, space_after) = heading_spec(level);
+            // GitHub: h1 2em / h2 1.5em with a bottom hairline and 0.3em of
+            // padding above it; h3 1.25 / h4 1 / h5 .875 / h6 .85 muted. All
+            // weight 600, line-height 1.25, 24 above, 16 below.
+            let ratio = heading_ratio(level);
+            let size = ed * ratio;
             v_flex()
                 .w(prose)
                 .mx_auto()
-                .mt(if level == 1 && index == 0 {
+                // Roomier than Primer's flat 24: section headings (h1/h2) get
+                // 2em above so long documents breathe between sections.
+                // Padding, not margin: the virtualised list measures the
+                // border box, so a margin is dropped from the item height and
+                // the next block draws into it.
+                .pt(if index == 0 {
                     px(0.)
+                } else if level <= 2 {
+                    ed * 2.
                 } else {
-                    ed * space_before
+                    ed * 1.5
                 })
-                .mb(ed * space_after)
+                .pb(ed)
                 .child(
                     div()
-                        .text_size(ed * ratio)
+                        .w_full()
+                        .when(level <= 2, |this| {
+                            this.pb(size * 0.3).border_b_1().border_color(gh.border)
+                        })
+                        .text_size(size)
+                        .line_height(size * 1.25)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .when(level <= 2, |this| this.font_family("Times New Roman"))
-                        .child(prose_text(index, text)),
+                        .child(prose_text(
+                            text,
+                            gh,
+                            if level == 6 { gh.muted } else { gh.fg },
+                            c.link,
+                            gpui::FontWeight::SEMIBOLD,
+                        )),
                 )
-                .when(level <= 2, |this| {
-                    this.child(
-                        h_flex()
-                            .mt(px(6.))
-                            .h(px(1.))
-                            .w_full()
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(px(if level == 1 { 64. } else { 32. }))
-                                    .bg(c.accent),
-                            )
-                            .child(div().h_full().flex_1().bg(c.border)),
-                    )
-                })
                 .into_any_element()
         }
         Block::Paragraph(text) => div()
             .w(prose)
             .mx_auto()
-            .my(ed * 0.625)
+            .pb(ed)
             .text_size(ed)
-            .line_height(ed * 1.62)
-            .child(prose_text(index, text))
+            .line_height(ed * 1.6)
+            .child(prose_text(text, gh, gh.fg, c.link, gpui::FontWeight::NORMAL))
             .into_any_element(),
-        Block::ListItem(depth, text, checked) => h_flex()
+        Block::ListItem(depth, text, checked, ordinal) => h_flex()
             .w(prose)
             .mx_auto()
             .items_start()
-            .pl(px(depth as f32 * 24.))
+            // GitHub indents the list body 2em per level with the marker
+            // hanging inside it, so even the first level starts 1em in.
+            .pl(px(16. + depth as f32 * 32.))
+            .pb(ed * 0.375)
             .gap(Space::S)
-            .child(
-                div()
-                    .w(px(16.))
+            .child(match checked {
+                // GitHub draws the native disabled checkbox: a 13-point square
+                // with a 3-point radius, blue with a white check when done.
+                Some(done) => div()
+                    .size(px(13.))
                     .flex_none()
-                    .text_color(if checked == Some(true) {
-                        c.workflow_done
-                    } else {
-                        c.ink_secondary
+                    .mt(px(((f32::from(ed) * 1.6) - 13.).max(0.) / 2.))
+                    .rounded(px(3.))
+                    .when(!done, |this| this.border_1().border_color(gh.border))
+                    .when(done, |this| {
+                        this.bg(gh.checked)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(10.))
+                            .text_color(gpui::white())
+                            .child("\u{2713}")
                     })
-                    .child(match checked {
-                        Some(true) => "\u{2611}",
-                        Some(false) => "\u{2610}",
-                        None => match depth {
-                            0 => "\u{2022}",
-                            1 => "\u{25e6}",
-                            _ => "-",
-                        },
-                    }),
-            )
+                    .into_any_element(),
+                None if ordinal.is_some() => div()
+                    .w(px(22.))
+                    .flex_none()
+                    .text_right()
+                    .text_size(ed)
+                    .line_height(ed * 1.6)
+                    .child(SharedString::from(format!(
+                        "{}.",
+                        ordinal.unwrap_or_default()
+                    )))
+                    .into_any_element(),
+                // A drawn disc, not a glyph: the bullet characters render at a
+                // fraction of the type size and read as flecks. GitHub's
+                // markers are solid disc, hollow circle, then square by depth.
+                None => div()
+                    .w(px(16.))
+                    .h(ed * 1.6)
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(match depth {
+                        0 => div().size(px(6.)).rounded_full().bg(gh.fg),
+                        1 => div()
+                            .size(px(6.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(gh.fg),
+                        _ => div().size(px(5.)).bg(gh.fg),
+                    })
+                    .into_any_element(),
+            })
             .child(
                 // `min_w(0)` beats the automatic minimum, which is the width of
                 // the text on one line. Without it the item never wraps and the
@@ -426,44 +612,40 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
                     .flex_1()
                     .min_w(px(0.))
                     .text_size(ed)
-                    .line_height(ed * 1.55)
-                    .when(checked == Some(true), |this| {
-                        this.text_color(c.ink_secondary).line_through()
-                    })
-                    .child(prose_text(index, text)),
+                    .line_height(ed * 1.6)
+                    .child(prose_text(text, gh, gh.fg, c.link, gpui::FontWeight::NORMAL)),
             )
             .into_any_element(),
         // No `overflow_hidden` on either card: clipping a card whose rows are
         // sized by wrapped text collapses it to nothing inside the scrolling
         // document. The rounded corners lose their clip; the content stays.
-        Block::Code(code) => render_code_block(index, code, c, bleed, ed, micro),
+        Block::Code(code) => {
+            render_code_block(index, code, c, gh, bleed, ed, scroll.unwrap_or_default())
+        }
+        // GitHub: 0.25em grey rule at the left, 1em of text inset, muted
+        // upright text.
         Block::Quote(text) => h_flex()
             .w(prose)
             .mx_auto()
-            .my(ed * 1.25)
+            .pb(ed)
             .items_stretch()
-            .child(div().w(px(3.)).flex_none().bg(c.accent))
+            .child(div().w(px(4.)).flex_none().bg(gh.border))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.))
-                    .pl(Space::L)
-                    .italic()
-                    .text_color(c.ink_secondary)
+                    .pl(ed)
                     .text_size(ed)
-                    .line_height(ed * 1.62)
-                    .child(prose_text(index, text)),
+                    .line_height(ed * 1.6)
+                    .child(prose_text(text, gh, gh.muted, c.link, gpui::FontWeight::NORMAL)),
             )
             .into_any_element(),
-        Block::Rule => h_flex()
+        // GitHub: a 0.25em solid bar with 24 points of vertical margin.
+        Block::Rule => div()
             .w(prose)
             .mx_auto()
-            .my(ed * 1.75)
-            .justify_center()
-            .gap(Space::S)
-            .child(dot(c.border))
-            .child(dot(c.accent))
-            .child(dot(c.border))
+            .py(ed * 1.5)
+            .child(div().w_full().h(px(4.)).bg(gh.border))
             .into_any_element(),
         Block::Table(rows) => {
             let mut iter = rows.into_iter();
@@ -489,145 +671,156 @@ fn render_block(index: usize, block: &Block, c: &Colors, measure: Pixels, zoom: 
             let last = (inner - base * (columns - 1) as f32).max(1.);
             let width = move |index: usize| px(if index + 1 == columns { last } else { base });
 
+            // GitHub: 6x13-point cell padding, 1-point grid borders, a plain
+            // bold header row, and every second body row on the subtle fill.
+            let gh = *gh;
+            let cell_style = move |element: gpui::Div, column: usize| {
+                element
+                    .w(width(column))
+                    .flex_none()
+                    .px(px(13.))
+                    .py(px(9.))
+                    .text_size(ed)
+                    .line_height(ed * 1.5)
+                    .when(column > 0, |this| {
+                        this.border_l_1().border_color(gh.border)
+                    })
+            };
+            div().w(px(card)).mx_auto().pb(ed).child(
             v_flex()
-                .w(px(card))
+                .w_full()
                 .flex_none()
-                .mx_auto()
-                .my(ed * 1.25)
-                .rounded(Radius::CONTROL)
                 .border_1()
-                .border_color(c.border)
-                .child(h_flex().w_full().items_start().bg(c.raised).children(
+                .border_color(gh.border)
+                .child(h_flex().w_full().items_stretch().children(
                     header.into_iter().enumerate().map(|(column, cell)| {
-                        div()
-                            .w(width(column))
-                            .flex_none()
-                            .p(Space::M)
-                            .text_size(ed * 0.90625)
-                            .line_height(ed * 0.90625 * 1.45)
+                        cell_style(div(), column)
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(SharedString::from(cell))
                     }),
                 ))
                 .children(body.into_iter().enumerate().map(|(index, row)| {
+                    // `items_stretch`: a cell sized to its own text leaves the
+                    // column border one line tall; stretched cells carry the
+                    // border the full row height like a real table grid.
                     h_flex()
                         .w_full()
-                        .items_start()
-                        .when(index % 2 == 1, |this| this.bg(c.panel))
+                        .items_stretch()
+                        .border_t_1()
+                        .border_color(gh.border)
+                        .when(index % 2 == 1, |this| this.bg(gh.alt_row))
                         .children(row.into_iter().enumerate().map(|(column, cell)| {
-                            div()
-                                .w(width(column))
-                                .flex_none()
-                                .p(Space::M)
-                                .text_size(ed * 0.90625)
-                                .line_height(ed * 0.90625 * 1.45)
-                                .child(SharedString::from(cell))
+                            cell_style(div(), column).child(SharedString::from(cell))
                         }))
-                }))
+                })))
                 .into_any_element()
         }
     }
 }
 
-fn heading_spec(level: u8) -> (f32, f32, f32) {
+/// GitHub heading sizes as ratios of the 16-point body: h1 2em, h2 1.5em,
+/// h3 1.25em, h4 1em, h5 .875em, h6 .85em.
+fn heading_ratio(level: u8) -> f32 {
     match level {
-        1 => (2.875, 3.5, 1.25),
-        2 => (1.75, 3.5, 1.25),
-        3 => (1.1875, 2., 0.75),
-        4 => (1., 2., 0.75),
-        _ => (0.9375, 2., 0.75),
+        1 => 2.,
+        2 => 1.5,
+        3 => 1.25,
+        4 => 1.,
+        5 => 0.875,
+        _ => 0.85,
     }
 }
 
+/// GitHub code block: one flat card on the subtle fill, 16 points of inset, a
+/// 6-point radius, 85% mono type at 1.45 line-height, no header band and no
+/// line numbers. The copy control floats at the top-right like github.com.
 fn render_code_block(
     index: usize,
     code: HighlightedCode,
     c: &Colors,
+    gh: &Gh,
     width: Pixels,
     editor_size: Pixels,
-    label_size: Pixels,
+    scroll: ScrollHandle,
 ) -> AnyElement {
-    let label = if code.language.is_empty() {
-        SharedString::from("code")
-    } else {
-        SharedString::from(code.language.clone())
-    };
     let copy_value = SharedString::from(code.source.clone());
     let spans = code
         .highlighter
         .spans_in(&code.source, 0..code.source.len(), &code.line_starts, c);
+    let mono = editor_size * 0.85;
 
-    v_flex()
+    div()
         .w(width)
         .mx_auto()
-        .my(editor_size * 1.25)
-        .rounded(Radius::CONTROL)
-        .border_1()
-        .border_color(c.border)
+        .pb(editor_size)
+        .relative()
         .child(
-            h_flex()
-                .w_full()
-                .justify_between()
-                .px(Space::M)
-                .py(Space::XS)
-                .bg(c.raised)
-                .text_size(label_size)
-                .text_color(c.ink_secondary)
-                .child(label)
-                .child(
-                    Clipboard::new(format!("markdown-code-copy-{index}"))
-                        .value(copy_value)
-                        .tooltip("Copy code"),
-                ),
-        )
-        .child(
-            v_flex()
+            div()
                 .id(format!("markdown-code-scroll-{index}"))
                 .w_full()
-                .p(Space::M)
-                .bg(c.panel)
-                .font_family("JetBrains Mono")
-                .text_size(editor_size * 0.90625)
-                .line_height(editor_size * 0.90625 * 1.35)
-                .overflow_x_scrollbar()
-                .children(code.source.lines().enumerate().map(|(line_index, line)| {
-                    let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
-                        .get(&line_index)
-                        .map(|line_spans| {
-                            line_spans
-                                .iter()
-                                .filter(|span| span.start < span.end && span.end <= line.len())
-                                .map(|span| {
-                                    (
-                                        span.start..span.end,
-                                        HighlightStyle {
-                                            color: Some(span.color),
-                                            ..Default::default()
-                                        },
-                                    )
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    h_flex()
+                .rounded(px(6.))
+                .bg(gh.code_bg)
+                // A block container stretches its child to its own width, so
+                // the content never exceeds the bounds and there is nothing
+                // to scroll. A row flex lets the `flex_none` column take its
+                // max-content width and overflow.
+                .flex()
+                .flex_row()
+                .items_start()
+                .overflow_x_scroll()
+                .track_scroll(&scroll)
+                .child(
+                    v_flex()
                         .flex_none()
-                        .child(
-                            div()
-                                .w(px(36.))
-                                .flex_none()
-                                .pr(Space::S)
-                                .text_right()
-                                .text_color(c.ink_secondary.opacity(0.55))
-                                .child(SharedString::from((line_index + 1).to_string())),
-                        )
-                        .child(
+                        .p(px(16.))
+                        .font_family("JetBrains Mono")
+                        .text_size(mono)
+                        .line_height(mono * 1.45)
+                        .children(code.source.lines().enumerate().map(|(line_index, line)| {
+                            let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = spans
+                                .get(&line_index)
+                                .map(|line_spans| {
+                                    line_spans
+                                        .iter()
+                                        .filter(|span| {
+                                            span.start < span.end && span.end <= line.len()
+                                        })
+                                        .map(|span| {
+                                            (
+                                                span.start..span.end,
+                                                HighlightStyle {
+                                                    color: Some(span.color),
+                                                    ..Default::default()
+                                                },
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
                             div().flex_none().whitespace_nowrap().child(
                                 StyledText::new(SharedString::from(line.to_string()))
                                     .with_highlights(highlights),
-                            ),
-                        )
-                })),
+                            )
+                        })),
+                ),
+        )
+        // The scrollbar overlays the card, not the padded wrapper, so its
+        // thumb sits on the card's bottom edge.
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom(editor_size)
+                .child(Scrollbar::horizontal(&scroll).id(format!("markdown-code-scrollbar-{index}"))),
+        )
+        .child(
+            div().absolute().top(px(8.)).right(px(8.)).child(
+                Clipboard::new(format!("markdown-code-copy-{index}"))
+                    .value(copy_value)
+                    .tooltip("Copy code"),
+            ),
         )
         .into_any_element()
 }
@@ -661,10 +854,12 @@ mod rendering_tests {
 
     #[test]
     fn heading_hierarchy_matches_the_rendering_spec() {
-        assert_eq!(heading_spec(1), (2.875, 3.5, 1.25));
-        assert_eq!(heading_spec(2), (1.75, 3.5, 1.25));
-        assert_eq!(heading_spec(3), (1.1875, 2., 0.75));
-        assert_eq!(heading_spec(6), (0.9375, 2., 0.75));
+        assert_eq!(heading_ratio(1), 2.);
+        assert_eq!(heading_ratio(2), 1.5);
+        assert_eq!(heading_ratio(3), 1.25);
+        assert_eq!(heading_ratio(4), 1.);
+        assert_eq!(heading_ratio(5), 0.875);
+        assert_eq!(heading_ratio(6), 0.85);
     }
 
     #[test]
@@ -673,6 +868,37 @@ mod rendering_tests {
         assert_eq!(fence_language("js title=demo"), Lang::JavaScript);
         assert_eq!(fence_language("zsh"), Lang::Bash);
         assert_eq!(fence_language("unknown"), Lang::None);
+    }
+
+    #[test]
+    fn ordered_items_carry_their_ordinals_and_bullets_do_not() {
+        let blocks = parse("3. three\n4. four\n\n- dash\n\n1. one\n");
+        let ordinals: Vec<Option<u64>> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::ListItem(_, _, _, ordinal) => Some(*ordinal),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(ordinals, vec![Some(3), Some(4), None, Some(1)]);
+    }
+
+    #[test]
+    fn soft_wrapped_prose_joins_into_one_line() {
+        let blocks = parse("first line of a paragraph\nsecond line, same paragraph\n");
+        let Some(Block::Paragraph(text)) = blocks.first() else {
+            panic!("expected a paragraph");
+        };
+        assert_eq!(text, "first line of a paragraph second line, same paragraph");
+    }
+
+    #[test]
+    fn hard_breaks_and_item_paragraphs_survive_the_join() {
+        assert_eq!(join_soft_wraps("kept  \nbreak", false), "kept  \nbreak");
+        assert_eq!(join_soft_wraps("kept\\\nbreak", false), "kept\\\nbreak");
+        assert_eq!(join_soft_wraps("one\n\n  two", false), "one\n\ntwo");
+        assert_eq!(join_soft_wraps("quote line\n> continues", true), "quote line continues");
     }
 
     #[test]
@@ -690,8 +916,45 @@ mod rendering_tests {
     }
 }
 
-fn dot(color: gpui::Hsla) -> impl IntoElement {
-    div().size(px(4.)).rounded_full().bg(color)
+/// A `raw` slice keeps the source's soft line wraps, and `TextView` renders a
+/// newline as a line break, so a hard-wrapped paragraph would keep its
+/// authoring width instead of filling the prose measure. Join those wraps into
+/// single spaces. A Markdown hard break - two trailing spaces or a backslash -
+/// keeps its newline. A quote slice carries the `>` marker of every
+/// continuation line; `quoted` drops it so the reparse sees only the text.
+fn join_soft_wraps(inline: &str, quoted: bool) -> String {
+    let mut out = String::with_capacity(inline.len());
+    for (index, line) in inline.lines().enumerate() {
+        let line = if quoted && index > 0 {
+            line.trim_start()
+                .trim_start_matches('>')
+                .trim_start_matches([' ', '\t'])
+        } else {
+            line
+        };
+        if index == 0 {
+            out.push_str(line);
+            continue;
+        }
+        // A blank line separates paragraphs inside one block (a multi-paragraph
+        // list item); keep that break instead of joining across it.
+        if line.trim().is_empty() {
+            if !out.ends_with("\n\n") {
+                out.push_str("\n\n");
+            }
+            continue;
+        }
+        if out.ends_with("\n\n") {
+            // First line after a paragraph break: nothing to join onto.
+        } else if out.ends_with("  ") || out.ends_with('\\') {
+            out.push('\n');
+        } else {
+            out.truncate(out.trim_end_matches([' ', '\t']).len());
+            out.push(' ');
+        }
+        out.push_str(line.trim_start_matches([' ', '\t']));
+    }
+    out
 }
 
 fn parse(source: &str) -> Vec<Block> {
@@ -710,7 +973,9 @@ fn parse(source: &str) -> Vec<Block> {
     // `#`/`-` of a heading or list marker sits on the container Start, which is
     // never folded in, so the slice stays free of block markers.
     let mut span: Option<(usize, usize)> = None;
-    let mut list_depth = 0usize;
+    // One counter per open list: `Some` carries the next ordinal of an ordered
+    // list, `None` marks an unordered one. Depth is the stack height.
+    let mut list_counters: Vec<Option<u64>> = Vec::new();
     let mut task: Option<bool> = None;
     let mut in_code: Option<String> = None;
     let mut in_quote = false;
@@ -737,8 +1002,10 @@ fn parse(source: &str) -> Vec<Block> {
                     task = None;
                 }
             }
-            Event::Start(Tag::List(_)) => list_depth += 1,
-            Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
+            Event::Start(Tag::List(start)) => list_counters.push(start),
+            Event::End(TagEnd::List(_)) => {
+                list_counters.pop();
+            }
             Event::Start(Tag::BlockQuote(_)) => {
                 in_quote = true;
                 text.clear();
@@ -748,7 +1015,7 @@ fn parse(source: &str) -> Vec<Block> {
                 in_quote = false;
                 let inline = raw(span);
                 if !inline.is_empty() {
-                    blocks.push(Block::Quote(inline));
+                    blocks.push(Block::Quote(join_soft_wraps(&inline, true)));
                 }
                 text.clear();
                 span = None;
@@ -800,7 +1067,7 @@ fn parse(source: &str) -> Vec<Block> {
                 if !in_quote && !in_item {
                     let inline = raw(span);
                     if !inline.is_empty() {
-                        blocks.push(Block::Paragraph(inline));
+                        blocks.push(Block::Paragraph(join_soft_wraps(&inline, false)));
                     }
                     text.clear();
                     span = None;
@@ -809,8 +1076,19 @@ fn parse(source: &str) -> Vec<Block> {
             Event::End(TagEnd::Item) => {
                 in_item = false;
                 let inline = raw(span);
+                let ordinal = list_counters.last_mut().and_then(|counter| {
+                    let value = (*counter)?;
+                    *counter = Some(value + 1);
+                    Some(value)
+                });
                 if !inline.is_empty() {
-                    blocks.push(Block::ListItem(list_depth.saturating_sub(1), inline, task));
+                    let depth = list_counters.len().saturating_sub(1);
+                    blocks.push(Block::ListItem(
+                        depth,
+                        join_soft_wraps(&inline, false),
+                        task,
+                        ordinal,
+                    ));
                 }
                 text.clear();
                 span = None;
@@ -863,7 +1141,7 @@ pub fn parse_summary(source: &str) -> Vec<(&'static str, usize)> {
         .map(|block| match block {
             Block::Heading(level, _) => ("heading", level as usize),
             Block::Paragraph(_) => ("paragraph", 0),
-            Block::ListItem(depth, _, _) => ("list", depth),
+            Block::ListItem(depth, _, _, _) => ("list", depth),
             Block::Code(code) => ("code", code.source.lines().count()),
             Block::Quote(_) => ("quote", 0),
             Block::Rule => ("rule", 0),

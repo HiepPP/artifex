@@ -38,14 +38,10 @@ impl Shell {
             || "overview".to_string(),
             |tab| {
                 if let Some(path) = tab.file_path() {
+                    // The blueprint breadcrumb reads workspace, chevron, then
+                    // the file's workspace-relative path.
                     let relative = path.strip_prefix(&self.workspace().root).unwrap_or(path);
-                    relative
-                        .parent()
-                        .filter(|parent| !parent.as_os_str().is_empty())
-                        .map_or_else(
-                            || "repository root".to_string(),
-                            |parent| parent.to_string_lossy().to_string(),
-                        )
+                    relative.to_string_lossy().to_string()
                 } else if tab.is_terminal() {
                     "terminal".to_string()
                 } else {

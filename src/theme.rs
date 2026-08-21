@@ -70,6 +70,9 @@ tokens! {
     pressed                 = (0xCCC7BF, 0x44494F);
     accent                  = (0xA44F32, 0xD79570);
     accent_ink              = (0xFFF9F2, 0x21150F);
+    // GitHub Primer link blues; the Markdown preview matches github.com.
+    link                    = (0x0969DA, 0x4493F8);
+    text_selection          = (0x4D8DCA, 0x4D8DCA);
     workflow_done           = (0x4E6C55, 0x7FA98A);
     workflow_todo           = (0x8A652B, 0xCAA15B);
     workflow_blocked        = (0x934941, 0xD17B72);
@@ -304,10 +307,13 @@ pub fn init(dark: bool, cx: &mut App) {
     colors.popover_foreground = c.ink;
     colors.input = c.border;
     colors.ring = c.accent;
-    colors.link = c.accent;
-    colors.link_hover = c.accent;
-    colors.link_active = c.accent;
-    colors.accent = c.selection;
+    colors.link = c.link;
+    colors.link_hover = c.link;
+    colors.link_active = c.link;
+    // The kit paints inline-code chips in `TextView` with this accent. A
+    // neutral ink wash reads like GitHub's grey chip in both appearances,
+    // instead of the warm selection tan.
+    colors.accent = c.ink.opacity(0.06);
     colors.accent_foreground = c.ink;
     colors.primary = c.accent;
     colors.primary_foreground = c.accent_ink;
@@ -318,8 +324,10 @@ pub fn init(dark: bool, cx: &mut App) {
     colors.secondary_hover = c.hover;
     colors.secondary_active = c.pressed;
     // Translucent so the selected glyphs stay legible: the kit paints this quad
-    // over the text, and the opaque token would blank the line out.
-    colors.selection = c.selection.opacity(0.5);
+    // over the text, and an opaque token would blank the line out. Prose text
+    // selection is the cool blue at 22 percent; the editor, diff, and terminal
+    // paint their own warm `selection` fill.
+    colors.selection = c.text_selection.opacity(0.22);
     colors.list = c.sidebar;
     colors.list_active = c.selection;
     colors.list_hover = c.hover;

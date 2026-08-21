@@ -1190,15 +1190,19 @@ impl Shell {
         });
 
         let last_commit = git_snapshot.commits.first().cloned();
-        let mut authors = Vec::new();
+        // Recent authors with their commit counts inside the recent-commit
+        // window, ordered by first appearance. The blueprint shows three rows
+        // and folds the rest into one `+N more contributors` line.
+        let mut authors: Vec<(String, usize)> = Vec::new();
         for commit in &git_snapshot.commits {
-            if !authors.contains(&commit.author) {
-                authors.push(commit.author.clone());
-            }
-            if authors.len() == 3 {
-                break;
+            if let Some(entry) = authors.iter_mut().find(|(name, _)| name == &commit.author) {
+                entry.1 += 1;
+            } else {
+                authors.push((commit.author.clone(), 1));
             }
         }
+        let extra_authors = authors.len().saturating_sub(3);
+        authors.truncate(3);
 
         v_flex()
             .size_full()
@@ -1308,7 +1312,16 @@ impl Shell {
                                                         .flex_1()
                                                         .truncate()
                                                         .text_size(Type::CAPTION * ui_zoom)
-                                                        .child(SharedString::from(label)),
+                                                        .child(SharedString::from(label.clone())),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_none()
+                                                        .text_size(Type::MICRO * ui_zoom)
+                                                        .text_color(c.ink_secondary)
+                                                        .child(SharedString::from(link_role(
+                                                            &label,
+                                                        ))),
                                                 )
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.workspace_mut().open_file(
@@ -1374,13 +1387,14 @@ impl Shell {
                                         .text_color(c.ink_secondary)
                                         .child("AUTHORS"),
                                 )
-                                .children(authors.into_iter().map(|author| {
+                                .children(authors.into_iter().map(|(author, count)| {
                                     h_flex()
                                         .items_center()
                                         .gap(Space::S)
                                         .child(
                                             div()
                                                 .size(px(22.))
+                                                .flex_none()
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -1398,14 +1412,38 @@ impl Shell {
                                                 )),
                                         )
                                         .child(
-                                            div()
+                                            v_flex()
                                                 .min_w(px(0.))
                                                 .flex_1()
-                                                .truncate()
-                                                .text_size(Type::CAPTION * ui_zoom)
-                                                .child(SharedString::from(author)),
+                                                .child(
+                                                    div()
+                                                        .truncate()
+                                                        .text_size(Type::CAPTION * ui_zoom)
+                                                        .child(SharedString::from(author)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(Type::MICRO * ui_zoom)
+                                                        .text_color(c.ink_secondary)
+                                                        .child(SharedString::from(format!(
+                                                            "{count} commit{}",
+                                                            if count == 1 { "" } else { "s" }
+                                                        ))),
+                                                ),
                                         )
-                                })),
+                                }))
+                                .when(extra_authors > 0, |this| {
+                                    this.child(
+                                        div()
+                                            .pt(Space::XS)
+                                            .text_size(Type::MICRO * ui_zoom)
+                                            .text_color(c.ink_secondary)
+                                            .child(SharedString::from(format!(
+                                                "+{extra_authors} more contributor{}",
+                                                if extra_authors == 1 { "" } else { "s" }
+                                            ))),
+                                    )
+                                }),
                         )
                     })
                     .when(git_snapshot.is_repo, |this| {
@@ -1548,4 +1586,24 @@ fn shorten_path(path: &std::path::Path) -> String {
         return text;
     }
     format!(".../{}", parts[parts.len() - 3..].join("/"))
+}
+
+/// `DESIGN.md` > Context Rail. Role label for a linked-file row, derived from
+/// the file name alone: the blueprint marks each link with what it is, not
+/// where it lives.
+fn link_role(label: &str) -> String {
+    let name = label.rsplit('/').next().unwrap_or(label);
+    let lower = name.to_lowercase();
+    if lower == "cargo.toml" || lower == "package.json" || lower.ends_with(".lock") {
+        return "manifest".to_string();
+    }
+    if lower == "main.rs" || lower == "lib.rs" {
+        return "entry point".to_string();
+    }
+    match lower.rsplit('.').next() {
+        Some("rs" | "swift" | "ts" | "js" | "py") => "source".to_string(),
+        Some("toml" | "json" | "yaml" | "yml" | "plist") => "config".to_string(),
+        Some("md") => lower.trim_end_matches(".md").to_string(),
+        _ => "file".to_string(),
+    }
 }

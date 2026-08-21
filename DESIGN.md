@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Status | Current implementation baseline |
-| Updated | 2026-08-16 |
+| Updated | 2026-08-21 |
 | Platform | macOS 26+ |
 | UI stack | Rust, GPUI (Zed), gpui-component |
 | Parent contract | `atelier/DESIGN.md`, Atelier baseline `02ebe5b` |
@@ -164,8 +164,8 @@ Rules:
 | `PALETTE_HEIGHT` | 410 | Quick Open and Command Palette |
 | `PALETTE_FIELD` | 52 | Overlay query field |
 | `TITLE_BAR` | 28 | Reserve under the transparent title bar |
-| `documentMaxWidth` | 720 | Markdown prose measure |
-| `documentBleedMaxWidth` | 880 | Markdown wide-block measure |
+| `PROSE_WIDTH` | 980 | Markdown column, GitHub `.markdown-body` measure |
+| `VIEWPORT_PADDING` | 32 | Markdown document inset on every side |
 | `CONTEXT_WIDTH` | 300 | Wide-layout context rail |
 
 The title-bar reserve is not a constant at use sites. Read it through
@@ -196,6 +196,8 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 | `pressed` | `#CCC7BF` | `#44494F` | Pressed state |
 | `accent` | `#A44F32` | `#D79570` | Primary emphasis and focus |
 | `accent_ink` | `#FFF9F2` | `#21150F` | Text on accent fill |
+| `link` | `#2B6EA6` | `#74A9D8` | Prose links in rendered text |
+| `text_selection` | `#4D8DCA` | `#4D8DCA` | Prose text selection, painted at 22 percent |
 | `workflow_done` | `#4E6C55` | `#7FA98A` | Completed workflow state |
 | `workflow_todo` | `#8A652B` | `#CAA15B` | Pending workflow state |
 | `workflow_blocked` | `#934941` | `#D17B72` | Blocked workflow state |
@@ -361,6 +363,11 @@ Every interactive control defines these states where relevant:
 - Pressed: `pressed` fill.
 - Selected: one glass surface with stable geometry. No accent border, underline,
   or leading rule.
+- Focused: a component-kit text field that owns keyboard focus shows the
+  two-point accent ring the kit paints from `colors.ring`. Surfaces with their
+  own caret - the editor, the terminal, a diff - show focus through the caret
+  alone. The overlay query field owns focus for the overlay's whole life, so it
+  stays ring-free by design.
 - Disabled: visible control at `0.45` opacity.
 
 Geometry rules:
@@ -454,9 +461,8 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Use a 36-point locator row followed by a 44-point tab and action row. This
   keeps orientation visible without spending 120 points on passive chrome.
 - The locator shows a folder glyph, the workspace, a chevron glyph, and the
-  selected file's parent location. Root files show `repository root`.
-- Keep the selected file or terminal identity in the active tab only. Never
-  repeat that title in the locator row.
+  selected file's workspace-relative path, matching the blueprint breadcrumb.
+  A terminal shows `terminal`; a diff shows `working tree`.
 - Use icon glyphs for breadcrumb separators. Never render raw `>` punctuation
   as interface chrome.
 - Tab widths stay between 112 and 220 points.
@@ -486,8 +492,13 @@ of inactive sessions. Every workspace stays fully live for the run.
 - The context rail has no repeated file-identity header. For Markdown, its first
   visible section is `On This Page`. Each heading scrolls the document to
   its block. Then show local linked files that resolve inside the workspace.
-- Show Git provenance from the live snapshot: last commit, recent authors,
-  branch, short HEAD, changed state, and repository sync status when available.
+  Each linked-file row carries a small trailing role label derived from the
+  file name: `manifest`, `entry point`, `source`, `config`, or a document's
+  lowercase stem.
+- Show Git provenance from the live snapshot: last commit, recent authors with
+  their commit counts inside the recent-commit window plus a `+N more
+  contributors` line when more exist, branch, short HEAD, changed state, and
+  repository sync status when available.
 - End with compact file metadata. Never repeat information already visible in
   the reader header.
 - In Standard mode the rail is hidden. In Compact mode both side surfaces are
@@ -567,58 +578,64 @@ selection is off (keyboard selection still works).
 
 ### Markdown Preview
 
-- Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
-- Hold prose on a 720-point measure. Let card blocks bleed to 880: tables and
-  fenced code cards read better wider, prose does not.
-- Set document viewport horizontal padding from the window mode: 48 points in
-  Wide, 32 in Standard, and 24 in Compact. Let the scroll viewport fill the
-  reader from top to bottom. Heading and block rhythm own vertical spacing.
-  Keep structural padding fixed while editor zoom scales type and its derived
-  vertical rhythm.
-- Publish headings and local links to the shell context rail. The Markdown view
-  owns parsing and scroll targets; the shell owns the surrounding rail.
-- Heading ratios are H1 `2.875`, H2 `1.75`, H3 `1.1875`, H4 `1.00`, H5 and H6
-  `0.9375`. H1 and H2 use the document serif face. H1 resolves to 46 points at
-  default zoom. Draw the H1 and H2 rule as an accent lead segment followed by a
-  hairline.
-- Resolve the default heading sizes to H1 46, H2 28, H3 19, H4 16, and H5-H6
-  15 points. Use semibold weight throughout. Give H1 and H2 56 points before
-  and 20 points after. Give H3-H6 32 points before and 12 points after. This
-  larger section rhythm separates long reading passages without adding cards.
-  H1 starts the document without an extra top gap.
-- Set prose at 16 points with a `1.62` line-height and a 20-point block gap.
-  Links use the accent and underline. Emphasis stays italic; strong stays
-  semibold. Inline code uses the mono face on the low-contrast selection fill.
-- Give list content a 24-point indent and an eight-point marker gap. Keep list
-  line-height at `1.55`. Task items use a square checkbox; checked items use the
-  completed workflow colour and secondary struck text.
-- Give quotes a three-point accent rule, a 16-point text inset, and `1.62`
-  line-height. Keep quote text italic and secondary, without a card fill.
-- Render a divider as a centered three-dot ornament with 28 points of vertical
-  gap, accent in the middle.
-- Set code cards at 14.5-point mono type with `1.35` line-height. Keep the
-  language header, line numbers, 12-point body inset, eight-point radius, and
-  the low-contrast panel fill. Parse a supported fence language once on reload
-  and reuse the shared syntax palette while rendering visible code cards.
-- Keep long code lines on one line. Show a horizontal scrollbar only when
-  content exceeds the card width.
-- Place a copy control at the right edge of the code header. After copying,
-  show check feedback for about two seconds.
-- Set table cells at 14.5 points with `1.45` line-height and 12-point insets.
-  Use a raised semibold header, subtle alternating rows, a one-point border, and
-  an eight-point radius.
-- In the context outline, mark the active heading with semibold text and the
-  terracotta accent. Do not add a second reader identity header.
-- Clicking an outline item aligns that heading with the top of the reader,
-  even when it is already visible.
-- Keep the accent budget small: the H1 and H2 rule lead, the quote rule, and the
-  divider centre. Light and dark appearances use the shared `editor`, `panel`,
-  `raised`, `border`, `ink`, `ink_secondary`, `accent`, and workflow tokens.
+The preview matches github.com's `.markdown-body` rendering (Primer) rather
+than the application tokens. This is a deliberate product decision: a README
+should look the way its author saw it on GitHub.
 
-Divergence: Atelier renders one selectable native document so selection crosses
-blocks. GPUI has no equivalent of `NSTextStorage`, so this build renders a tree
-of block elements and selection is per block. Mermaid figures, images, callouts,
-footnotes, and front-matter cards are not ported.
+- Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
+- Surface: white `#FFFFFF` / dark `#0D1117`; text `#1F2328` / `#F0F6FC`;
+  muted `#59636E` / `#9198A1`; borders `#D1D9E0` / `#3D444D`; subtle fill
+  `#F6F8FA` / `#151B23`. These live in `markdown.rs` as the Primer palette,
+  not in `theme.rs`; only the link blue (`#0969DA` / `#4493F8`) is a shared
+  token because the component kit reads it.
+- One 980-point column with 32 points of padding on every side, in every
+  layout mode. Tables and code share the prose column; nothing bleeds.
+- Prose blocks (heading, paragraph, list item, quote) reparse their inline
+  Markdown into `StyledText` runs. Each run carries its own font, so code
+  spans take JetBrains Mono on a grey chip (`#818B98` at 12 percent, dark
+  `#656C76` at 20 percent) padded by a space either side. Bold, italic,
+  strikethrough and link colour come from the same runs. Prose is not
+  selectable and links are not clickable; GitHub parity won over selection.
+- Soft line breaks join into spaces so a hard-wrapped source paragraph fills
+  the measure. Two trailing spaces or a backslash keep a hard break. A blank
+  line inside a list item keeps its paragraph break.
+- Headings use the system sans at weight 600 and line-height 1.25: h1 2em,
+  h2 1.5em, h3 1.25em, h4 1em, h5 .875em, h6 .85em in muted ink. h1 and h2
+  carry a one-point hairline below with 0.3em of padding. h1 and h2 take 32
+  points above, h3-h6 24, all 16 below. The first block starts flush.
+- Prose is 16 points at line-height 1.6 with 16 points below each block.
+- Lists indent 16 points plus 32 per level. Markers are drawn, not glyphs:
+  a 6-point disc, then a hollow circle, then a 5-point square by depth, in
+  the text colour; ordinals are right-aligned. Items sit 6 points apart.
+  Task items draw a 13-point box with a 3-point radius; a done item fills it
+  with the GitHub blue and a white check and does not strike the text.
+- Quotes carry a 4-point grey rule at the left, a 1em text inset, and muted
+  upright text.
+- A divider is a 4-point solid bar with 24 points above and below.
+- Code cards are flat: subtle fill, 6-point radius, 16-point inset, 85% mono
+  type at line-height 1.45, no language header, no line numbers, and a copy
+  control floating at the top-right. Long lines stay on one line; the card
+  scrolls horizontally with its own `ScrollHandle` owned by the view and a
+  kit scrollbar overlaid on the card. The scroll container is a row flex so
+  the content can exceed the bounds; a block container would stretch it and
+  leave nothing to scroll. Syntax colours still come from the shared
+  highlight palette.
+- Tables: 9x13-point cell padding, one-point grid borders on every cell,
+  a bold header without fill, every second body row on the subtle fill,
+  square corners. Rows stretch their cells so the column borders span the
+  full row height. Columns share the card width equally; GitHub sizes them
+  to content, which GPUI cannot do without definite widths.
+- Block rhythm uses padding, never margin. The virtualised `list` measures
+  the border box, so a margin is dropped from the item height and the next
+  block paints into it.
+- Publish headings and local links to the shell context rail. The Markdown
+  view owns parsing and scroll targets; the shell owns the surrounding rail.
+  Clicking an outline item aligns that heading with the top of the reader.
+
+Divergence: Atelier renders one selectable native document. This build
+renders a tree of block elements; nothing in the preview is selectable.
+Mermaid figures, images, callouts, footnotes, and front-matter cards are not
+ported.
 
 ### Quick Open, Command Palette, and Search All Files
 
