@@ -2,5 +2,10 @@
 /dist
 /.build_start
 
-# Local design references and audit captures, not part of the build
-app-design/
+# Local design references and audit captures, not part of the build.
+# The annotated blueprints are the design source of truth and stay tracked.
+app-design/*
+!app-design/reading-room-implementation-blueprint.png
+!app-design/markdown-preview-implementation-blueprint-v2.png
+!app-design/markdown-preview-rendering-spec-v3.png
+!app-design/markdown-preview-detail-annotated.png
