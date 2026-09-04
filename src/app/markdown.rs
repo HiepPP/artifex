@@ -13,8 +13,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, Edges, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, HighlightStyle, Hsla,
+    AnyElement, App, BorderStyle, Bounds, ClipboardItem, Context, CursorStyle, Edges, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, HighlightStyle, Hsla,
     InspectorElementId, IntoElement, KeyDownEvent, LayoutId, ListAlignment, ListOffset, ListState,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, ScrollHandle, SharedString, StyledText, TextLayout, Window, canvas, div, list, point,
@@ -128,6 +128,7 @@ struct ProseRenderState {
     layouts: Rc<RefCell<HashMap<(usize, usize), ProseLayout>>>,
     selection: Option<(ProsePosition, ProsePosition)>,
     selection_color: Hsla,
+    pointer_cursor: bool,
 }
 
 fn distance_to_bounds(point: Point<Pixels>, bounds: Bounds<Pixels>) -> f32 {
@@ -160,6 +161,11 @@ pub struct ActiveHeadingChanged {
     pub block: Option<usize>,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenFileRequested {
+    pub path: PathBuf,
+}
+
 /// A parsed Markdown document.
 ///
 /// The parse happens on open and on reload, never per frame. Rendering a
@@ -171,6 +177,7 @@ pub struct MarkdownView {
     headings: Vec<Heading>,
     active_heading: Option<usize>,
     links: Vec<PathBuf>,
+    clickable_link_ranges: Vec<Vec<Range<usize>>>,
     /// Virtualised block list. Styled prose and its selection layout are heavier
     /// than a plain-text `div`; `list` measures and paints only the blocks in the
     /// viewport (plus overdraw), so scroll cost tracks the viewport.
@@ -192,6 +199,7 @@ pub struct MarkdownView {
     selection_anchor: Option<ProsePosition>,
     selection_head: Option<ProsePosition>,
     dragging_selection: bool,
+    hovered_link: Option<usize>,
 }
 
 impl MarkdownView {
@@ -203,6 +211,7 @@ impl MarkdownView {
                 headings: Vec::new(),
                 active_heading: None,
                 links: Vec::new(),
+                clickable_link_ranges: Vec::new(),
                 list: ListState::new(0, ListAlignment::Top, px(400.)),
                 measure: Rc::new(Cell::new(px(PROSE_WIDTH))),
                 code_scrolls: RefCell::new(HashMap::new()),
@@ -211,6 +220,7 @@ impl MarkdownView {
                 selection_anchor: None,
                 selection_head: None,
                 dragging_selection: false,
+                hovered_link: None,
             };
             view.reload();
             view
@@ -221,6 +231,15 @@ impl MarkdownView {
         let source = std::fs::read_to_string(&self.path).unwrap_or_default();
         self.blocks = parse(&source);
         self.links = local_links(&source, &self.path);
+        self.clickable_link_ranges = self
+            .blocks
+            .iter()
+            .map(|block| {
+                block_inline_source(block)
+                    .map(|source| local_link_ranges(source, &self.path))
+                    .unwrap_or_default()
+            })
+            .collect();
         self.headings = self
             .blocks
             .iter()
@@ -241,6 +260,7 @@ impl MarkdownView {
         self.selection_anchor = None;
         self.selection_head = None;
         self.dragging_selection = false;
+        self.hovered_link = None;
         self.active_heading = active_heading_block(&self.headings, 0);
     }
 
@@ -328,13 +348,10 @@ impl MarkdownView {
                     byte: last.range_start + last.text.len(),
                 });
             }
-            layouts
-                .iter()
-                .copied()
-                .min_by(|left, right| {
-                    distance_to_bounds(point, left.bounds)
-                        .total_cmp(&distance_to_bounds(point, right.bounds))
-                })?
+            layouts.iter().copied().min_by(|left, right| {
+                distance_to_bounds(point, left.bounds)
+                    .total_cmp(&distance_to_bounds(point, right.bounds))
+            })?
         };
 
         let byte = layout
@@ -347,6 +364,19 @@ impl MarkdownView {
             block: layout.block,
             byte,
         })
+    }
+
+    fn hovered_link_at(&self, point: Point<Pixels>) -> Option<usize> {
+        let layouts = self.prose_layouts.borrow();
+        let layout = layouts
+            .values()
+            .find(|layout| layout.bounds.contains(&point))?;
+        let byte = layout.layout.index_for_position(point).ok()? + layout.range_start;
+        self.clickable_link_ranges
+            .get(layout.block)?
+            .iter()
+            .any(|range| range.contains(&byte))
+            .then_some(layout.block)
     }
 
     fn on_mouse_down(
@@ -366,6 +396,11 @@ impl MarkdownView {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let hovered_link = self.hovered_link_at(event.position);
+        if self.hovered_link != hovered_link {
+            self.hovered_link = hovered_link;
+            cx.notify();
+        }
         if !self.dragging_selection {
             return;
         }
@@ -379,13 +414,25 @@ impl MarkdownView {
         if !self.dragging_selection {
             return;
         }
+        let mut clicked_link = None;
         if let Some(position) = self.prose_position_at(event.position, false) {
             self.selection_head = Some(position);
+            if self.selection().is_none()
+                && let Some(source) = self
+                    .blocks
+                    .get(position.block)
+                    .and_then(block_inline_source)
+            {
+                clicked_link = local_link_at(source, position.byte, &self.path);
+            }
         }
         self.dragging_selection = false;
         if self.selection().is_none() {
             self.selection_anchor = None;
             self.selection_head = None;
+        }
+        if let Some(path) = clicked_link {
+            cx.emit(OpenFileRequested { path });
         }
         cx.notify();
     }
@@ -427,6 +474,7 @@ impl MarkdownView {
 }
 
 impl EventEmitter<ActiveHeadingChanged> for MarkdownView {}
+impl EventEmitter<OpenFileRequested> for MarkdownView {}
 
 impl Focusable for MarkdownView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -513,6 +561,7 @@ impl Render for MarkdownView {
                                             layouts: view.prose_layouts.clone(),
                                             selection: view.selection(),
                                             selection_color: colors.text_selection.opacity(0.22),
+                                            pointer_cursor: view.hovered_link == Some(index),
                                         };
                                         render_block(
                                             index,
@@ -609,27 +658,92 @@ mod outline_tests {
             Some("Gate\tVerdict\nVietnamese\tGo")
         );
     }
+
+    #[test]
+    fn local_markdown_link_resolves_only_when_its_label_is_clicked() {
+        let dir =
+            std::env::temp_dir().join(format!("artifex-markdown-link-test-{}", std::process::id()));
+        let document = dir.join("README.md");
+        let target = dir.join("guide.md");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(&target, "# Guide\n").unwrap();
+
+        let source = "Read [the guide](guide.md#intro) next.";
+
+        assert_eq!(local_link_ranges(source, &document), vec![5..14]);
+        assert_eq!(local_link_at(source, 6, &document), Some(target));
+        assert_eq!(local_link_at(source, 1, &document), None);
+    }
+}
+
+fn local_link_path(destination: &str, document: &Path) -> Option<PathBuf> {
+    let Some(parent) = document.parent() else {
+        return None;
+    };
+    let target = destination.split('#').next().unwrap_or_default();
+    if target.is_empty()
+        || target.contains("://")
+        || target.starts_with("mailto:")
+        || target.starts_with('#')
+    {
+        return None;
+    }
+    let path = parent.join(target);
+    path.is_file().then_some(path)
+}
+
+fn local_links_with_ranges(source: &str, document: &Path) -> Vec<(Range<usize>, PathBuf)> {
+    let mut offset = 0;
+    let mut link: Option<(usize, String)> = None;
+    let mut links = Vec::new();
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+
+    for event in Parser::new_ext(source, options) {
+        match event {
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                link = Some((offset, dest_url.to_string()));
+            }
+            Event::End(TagEnd::Link) => {
+                let Some((start, destination)) = link.take() else {
+                    continue;
+                };
+                if let Some(path) = local_link_path(&destination, document) {
+                    links.push((start..offset, path));
+                }
+            }
+            Event::Text(text) => offset += text.len(),
+            Event::Code(text) => offset += text.len() + 2,
+            Event::SoftBreak | Event::HardBreak => offset += 1,
+            _ => {}
+        }
+    }
+    links
+}
+
+fn local_link_ranges(source: &str, document: &Path) -> Vec<Range<usize>> {
+    local_links_with_ranges(source, document)
+        .into_iter()
+        .map(|(range, _)| range)
+        .collect()
+}
+
+fn local_link_at(source: &str, byte: usize, document: &Path) -> Option<PathBuf> {
+    local_links_with_ranges(source, document)
+        .into_iter()
+        .find_map(|(range, path)| range.contains(&byte).then_some(path))
 }
 
 fn local_links(source: &str, document: &Path) -> Vec<PathBuf> {
-    let Some(parent) = document.parent() else {
-        return Vec::new();
-    };
     let mut links = Vec::new();
     for event in Parser::new_ext(source, Options::all()) {
         let Event::Start(Tag::Link { dest_url, .. }) = event else {
             continue;
         };
-        let target = dest_url.split('#').next().unwrap_or_default();
-        if target.is_empty()
-            || target.contains("://")
-            || target.starts_with("mailto:")
-            || target.starts_with('#')
-        {
+        let Some(path) = local_link_path(&dest_url, document) else {
             continue;
-        }
-        let path = parent.join(target);
-        if path.is_file() && !links.contains(&path) {
+        };
+        if !links.contains(&path) {
             links.push(path);
         }
     }
@@ -712,7 +826,11 @@ fn prose_text(
     let styled_text = StyledText::new(text.clone()).with_runs(runs);
     div()
         .w_full()
-        .cursor_text()
+        .cursor(if state.pointer_cursor {
+            CursorStyle::PointingHand
+        } else {
+            CursorStyle::IBeam
+        })
         .child(SelectableStyledText::new(
             index,
             range,
@@ -787,8 +905,16 @@ fn inline_runs(
         } else {
             font(".SystemUIFont")
         };
-        face.weight = if bold && !code { FontWeight::BOLD } else { weight };
-        face.style = if italic && !code { FontStyle::Italic } else { FontStyle::Normal };
+        face.weight = if bold && !code {
+            FontWeight::BOLD
+        } else {
+            weight
+        };
+        face.style = if italic && !code {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        };
         runs.push(TextRun {
             len: chunk.len(),
             font: face,
@@ -1155,17 +1281,9 @@ fn render_block(
                             .child("\u{2713}")
                     })
                     .into_any_element(),
-                None if ordinal.is_some() => div()
-                    .w(px(22.))
-                    .flex_none()
-                    .text_right()
-                    .text_size(ed)
-                    .line_height(ed * 1.6)
-                    .child(SharedString::from(format!(
-                        "{}.",
-                        ordinal.unwrap_or_default()
-                    )))
-                    .into_any_element(),
+                None if ordinal.is_some() => {
+                    ordered_marker(ordinal.unwrap_or_default(), ed).into_any_element()
+                }
                 // A drawn disc, not a glyph: the bullet characters render at a
                 // fraction of the type size and read as flecks. GitHub's
                 // markers are solid disc, hollow circle, then square by depth.
@@ -1257,12 +1375,7 @@ fn render_block(
 
             let columns = header
                 .len()
-                .max(
-                    body.iter()
-                        .map(|(row, _)| row.len())
-                        .max()
-                        .unwrap_or(0),
-                )
+                .max(body.iter().map(|(row, _)| row.len()).max().unwrap_or(0))
                 .max(1);
             // Definite pixel widths, resolved from the card the cells sit in,
             // not from the document column. The card stops growing at
@@ -1288,9 +1401,7 @@ fn render_block(
                     .text_size(ed)
                     .line_height(ed * 1.5)
                     .cursor_text()
-                    .when(column > 0, |this| {
-                        this.border_l_1().border_color(gh.border)
-                    })
+                    .when(column > 0, |this| this.border_l_1().border_color(gh.border))
             };
             div()
                 .w(px(card))
@@ -1303,15 +1414,13 @@ fn render_block(
                         .border_1()
                         .border_color(gh.border)
                         .child(h_flex().w_full().items_stretch().children(
-                            header
-                                .into_iter()
-                                .zip(header_ranges)
-                                .enumerate()
-                                .map(|(column, (cell, range))| {
+                            header.into_iter().zip(header_ranges).enumerate().map(
+                                |(column, (cell, range))| {
                                     cell_style(div(), column)
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(table_cell_text(index, range, cell, prose_state))
-                                }),
+                                },
+                            ),
                         ))
                         .children(body.into_iter().enumerate().map(
                             |(row_index, (row, ranges))| {
@@ -1340,6 +1449,17 @@ fn render_block(
                 .into_any_element()
         }
     }
+}
+
+fn ordered_marker(ordinal: u64, size: Pixels) -> gpui::Div {
+    div()
+        .w(px(22.))
+        .flex_none()
+        .whitespace_nowrap()
+        .text_right()
+        .text_size(size)
+        .line_height(size * 1.6)
+        .child(SharedString::from(format!("{ordinal}.")))
 }
 
 /// GitHub heading sizes as ratios of the 16-point body: h1 2em, h2 1.5em,
@@ -1437,7 +1557,9 @@ fn render_code_block(
                 .left_0()
                 .right_0()
                 .bottom(editor_size)
-                .child(Scrollbar::horizontal(&scroll).id(format!("markdown-code-scrollbar-{index}"))),
+                .child(
+                    Scrollbar::horizontal(&scroll).id(format!("markdown-code-scrollbar-{index}")),
+                ),
         )
         .child(
             div().absolute().top(px(8.)).right(px(8.)).child(
@@ -1509,12 +1631,25 @@ mod rendering_tests {
     }
 
     #[test]
+    fn multi_digit_ordered_markers_stay_on_one_line() {
+        let mut marker = ordered_marker(10, px(16.));
+
+        assert_eq!(
+            marker.style().text.white_space,
+            Some(gpui::WhiteSpace::Nowrap)
+        );
+    }
+
+    #[test]
     fn soft_wrapped_prose_joins_into_one_line() {
         let blocks = parse("first line of a paragraph\nsecond line, same paragraph\n");
         let Some(Block::Paragraph(text)) = blocks.first() else {
             panic!("expected a paragraph");
         };
-        assert_eq!(text, "first line of a paragraph second line, same paragraph");
+        assert_eq!(
+            text,
+            "first line of a paragraph second line, same paragraph"
+        );
     }
 
     #[test]
@@ -1522,7 +1657,10 @@ mod rendering_tests {
         assert_eq!(join_soft_wraps("kept  \nbreak", false), "kept  \nbreak");
         assert_eq!(join_soft_wraps("kept\\\nbreak", false), "kept\\\nbreak");
         assert_eq!(join_soft_wraps("one\n\n  two", false), "one\n\ntwo");
-        assert_eq!(join_soft_wraps("quote line\n> continues", true), "quote line continues");
+        assert_eq!(
+            join_soft_wraps("quote line\n> continues", true),
+            "quote line continues"
+        );
     }
 
     #[test]

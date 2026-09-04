@@ -5,7 +5,7 @@ use gpui::{AnyElement, Context, IntoElement, MouseButton, ParentElement, SharedS
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::app::chrome::{Glyph, QuietTooltip as _, empty_state, file_glyph, icon_button};
-use crate::app::markdown::{ActiveHeadingChanged, MarkdownView};
+use crate::app::markdown::{ActiveHeadingChanged, MarkdownView, OpenFileRequested};
 use crate::app::shell::Shell;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
 use crate::terminal::TerminalEvent;
@@ -502,26 +502,43 @@ impl Shell {
     }
 
     fn observe_markdown_events(&mut self, cx: &mut Context<Self>) {
-        let sources: Vec<gpui::Entity<MarkdownView>> = self
+        let sources: Vec<(std::path::PathBuf, gpui::Entity<MarkdownView>)> = self
             .workspaces
             .iter()
             .flat_map(|workspace| {
-                workspace.tabs.iter().filter_map(|tab| match &tab.kind {
-                    TabKind::File {
-                        preview_view: Some(PreviewKind::Markdown(preview)),
-                        ..
-                    } => Some(preview.clone()),
-                    _ => None,
-                })
+                let root = workspace.root.clone();
+                workspace
+                    .tabs
+                    .iter()
+                    .filter_map(move |tab| match &tab.kind {
+                        TabKind::File {
+                            preview_view: Some(PreviewKind::Markdown(preview)),
+                            ..
+                        } => Some((root.clone(), preview.clone())),
+                        _ => None,
+                    })
             })
             .collect();
 
-        for preview in sources {
+        for (root, preview) in sources {
             if !self.markdown_event_sources.insert(preview.entity_id()) {
                 continue;
             }
             cx.subscribe(&preview, |_, _, event: &ActiveHeadingChanged, cx| {
                 let _ = event.block;
+                cx.notify();
+            })
+            .detach();
+            cx.subscribe(&preview, move |this, _, event: &OpenFileRequested, cx| {
+                let Some(index) = this
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.root == root)
+                else {
+                    return;
+                };
+                this.active = index;
+                this.workspaces[index].open_file(event.path.clone(), false, cx);
                 cx.notify();
             })
             .detach();

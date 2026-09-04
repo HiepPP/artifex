@@ -597,7 +597,9 @@ should look the way its author saw it on GitHub.
   `#656C76` at 20 percent) padded by a space either side. Bold, italic,
   strikethrough and link colour come from the same runs. Prose is selectable:
   drag paints the shared blue selection over the exact `StyledText` layout,
-  and `Cmd-C` copies the flattened inline text. Links remain non-clickable.
+  and `Cmd-C` copies the flattened inline text. A single click on a local link
+  that resolves to an existing file opens it in a permanent editor tab; its
+  cursor changes to a pointer on hover.
 - Soft line breaks join into spaces so a hard-wrapped source paragraph fills
   the measure. Two trailing spaces or a backslash keep a hard break. A blank
   line inside a list item keeps its paragraph break.
