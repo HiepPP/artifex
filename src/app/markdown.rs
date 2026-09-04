@@ -1725,6 +1725,7 @@ fn parse(source: &str) -> Vec<Block> {
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
 
     let mut blocks = Vec::new();
     // Plain text, still used for the code cards and table cells.

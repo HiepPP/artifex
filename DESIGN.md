@@ -584,6 +584,8 @@ than the application tokens. This is a deliberate product decision: a README
 should look the way its author saw it on GitHub.
 
 - Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
+- Treat leading YAML frontmatter as metadata: omit it from Preview and keep it
+  visible in Source.
 - Surface: white `#FFFFFF` / dark `#0D1117`; text `#1F2328` / `#F0F6FC`;
   muted `#59636E` / `#9198A1`; borders `#D1D9E0` / `#3D444D`; subtle fill
   `#F6F8FA` / `#151B23`. These live in `markdown.rs` as the Primer palette,

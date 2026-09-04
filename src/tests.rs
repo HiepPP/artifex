@@ -796,6 +796,22 @@ fn markdown_parses_tables_lists_and_code() {
 }
 
 #[test]
+fn markdown_hides_yaml_frontmatter() {
+    use crate::app::markdown::parse_summary;
+
+    let source = "---\n\
+                  title: Vốn, stop và khối lượng\n\
+                  prerequisites:\n\
+                    - L-00\n\
+                    - L-04\n\
+                  ---\n\n\
+                  # Nội dung bài học\n\n\
+                  Phần xem trước.\n";
+
+    assert_eq!(parse_summary(source), vec![("heading", 1), ("paragraph", 0)]);
+}
+
+#[test]
 fn recent_commits_are_read() {
     use crate::services::git;
 
