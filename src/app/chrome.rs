@@ -186,6 +186,58 @@ pub fn count_badge(count: usize, tint: Hsla, _c: Colors, ui_zoom: f32) -> impl I
         .child(SharedString::from(count.to_string()))
 }
 
+/// A distinct incoming-commit count. The down arrow keeps the meaning
+/// legible without relying on the green Git tint alone.
+pub fn incoming_count_badge(
+    id: impl Into<ElementId>,
+    count: usize,
+    c: Colors,
+    ui_zoom: f32,
+) -> impl IntoElement {
+    incoming_count_badge_element(id, count, c, ui_zoom, false)
+}
+
+/// The same incoming count with a filled treatment for the graphite rail.
+pub fn rail_incoming_count_badge(
+    id: impl Into<ElementId>,
+    count: usize,
+    c: Colors,
+    ui_zoom: f32,
+) -> impl IntoElement {
+    incoming_count_badge_element(id, count, c, ui_zoom, true)
+}
+
+fn incoming_count_badge_element(
+    id: impl Into<ElementId>,
+    count: usize,
+    c: Colors,
+    ui_zoom: f32,
+    filled: bool,
+) -> impl IntoElement {
+    let (background, ink) = if filled {
+        (c.git_added, c.accent_ink)
+    } else {
+        (c.git_added.opacity(0.18), c.git_added)
+    };
+
+    h_flex()
+        .id(id)
+        .flex_none()
+        .items_center()
+        .gap(px(2.))
+        .px(px(5.))
+        .py(px(1.))
+        .rounded_full()
+        .bg(background)
+        .font_family("JetBrains Mono")
+        .text_size(Type::MICRO * ui_zoom)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(ink)
+        .child(Icon::new(IconName::ArrowDown).xsmall().flex_none())
+        .child(SharedString::from(count.to_string()))
+        .tooltip_text(format!("{count} incoming commits"))
+}
+
 /// A header tab: icon, label, optional count. Each tab claims an equal share
 /// of the header, so two tabs read as one segmented control split down the
 /// middle instead of two pills floating at the leading edge.

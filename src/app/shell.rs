@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use gpui::prelude::*;
 use gpui::{
@@ -13,10 +14,15 @@ use gpui_component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{rail_count_badge, toolbar_icon_button};
+use crate::app::chrome::{
+    QuietTooltip, incoming_count_badge, rail_count_badge, rail_incoming_count_badge,
+    toolbar_icon_button,
+};
 use crate::app::editor::EditorView;
 use crate::app::overlays::OverlayState;
-use crate::app::workspace::{FileMode, PreviewKind, TabKind, Workspace, is_html_path};
+use crate::app::workspace::{
+    FileMode, GitOperationKind, PreviewKind, TabKind, Workspace, is_html_path,
+};
 use crate::services::git;
 use crate::services::session;
 use crate::services::settings;
@@ -516,7 +522,9 @@ impl Shell {
     /// Stages, commits and pushes, in that order. One path for the Git panel
     /// button and `Cmd-Return`.
     pub(crate) fn push_commit(&mut self, cx: &mut Context<Self>) {
-        if self.workspace().pushing {
+        if self.workspace().git_operation_in_flight() {
+            self.set_status("Git operation already in progress");
+            cx.notify();
             return;
         }
         let subject = self
@@ -534,6 +542,168 @@ impl Shell {
         }
         self.workspace_mut().pushing = false;
         self.workspace_mut().refresh_git();
+        cx.notify();
+    }
+
+    /// Pulls the configured upstream with a fast-forward-only Git operation.
+    /// Network work happens off the UI thread and completion is matched to the
+    /// workspace root plus operation identity before it can touch UI state.
+    pub(crate) fn pull_latest(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.workspace().git.clone();
+        if !snapshot.is_repo {
+            self.set_status("Pull unavailable: not a Git repository");
+            cx.notify();
+            return;
+        }
+        if snapshot.upstream.is_none() {
+            self.set_status("Pull unavailable: no upstream configured");
+            cx.notify();
+            return;
+        }
+        if self.workspace().has_unsaved_editors(cx) {
+            self.set_status("Save open files before pulling");
+            cx.notify();
+            return;
+        }
+        if self.workspace().git_operation_in_flight() {
+            self.set_status("Git operation already in progress");
+            cx.notify();
+            return;
+        }
+        let root = self.workspace().root.clone();
+        let Some(operation) = self
+            .workspace_mut()
+            .begin_git_operation(GitOperationKind::Pull)
+        else {
+            return;
+        };
+        self.set_status("Pulling latest...");
+        let worker_cancel = operation.cancel.clone();
+        let worker_root = root.clone();
+        cx.spawn(async move |shell, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if worker_cancel.load(Ordering::Relaxed) {
+                        return Err("Git pull cancelled".to_string());
+                    }
+                    git::pull_latest(&worker_root)
+                })
+                .await;
+            let _ = shell.update(cx, |shell, cx| {
+                let Some(index) = shell
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.root == root)
+                else {
+                    return;
+                };
+                let Some(workspace) = shell.workspaces.get_mut(index) else {
+                    return;
+                };
+                if !workspace.finish_git_operation(&operation) {
+                    return;
+                }
+                if operation.cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                match result {
+                    Ok(message) => {
+                        let skipped_dirty = workspace.reload_clean_file_views(cx);
+                        shell.set_status(if skipped_dirty {
+                            format!("{message}; save/reconcile open buffers")
+                        } else {
+                            message
+                        });
+                        cx.notify();
+                        shell.scan_workspace(index, true, true, cx);
+                    }
+                    Err(err) => {
+                        shell.set_status(err);
+                        cx.notify();
+                        // Pull may have fetched the tracking ref before
+                        // refusing the fast-forward, so refresh incoming
+                        // counts even on an actionable failure.
+                        shell.scan_workspace(index, false, true, cx);
+                    }
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Fetches the configured upstream so incoming commit counts reflect the
+    /// latest local remote-tracking ref. This is always an explicit action.
+    pub(crate) fn refresh_git_remote(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.workspace().git.clone();
+        if !snapshot.is_repo {
+            self.set_status("Git refresh unavailable: not a Git repository");
+            cx.notify();
+            return;
+        }
+        if snapshot.upstream.is_none() {
+            let index = self.active;
+            self.scan_workspace(index, false, true, cx);
+            self.set_status("Refreshed local Git; no upstream configured");
+            cx.notify();
+            return;
+        }
+        if self.workspace().git_operation_in_flight() {
+            self.set_status("Git operation already in progress");
+            cx.notify();
+            return;
+        }
+        let root = self.workspace().root.clone();
+        let Some(operation) = self
+            .workspace_mut()
+            .begin_git_operation(GitOperationKind::Fetch)
+        else {
+            return;
+        };
+        self.set_status("Fetching upstream...");
+        let worker_cancel = operation.cancel.clone();
+        let worker_root = root.clone();
+        cx.spawn(async move |shell, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if worker_cancel.load(Ordering::Relaxed) {
+                        return Err("Git fetch cancelled".to_string());
+                    }
+                    git::fetch_upstream(&worker_root)
+                })
+                .await;
+            let _ = shell.update(cx, |shell, cx| {
+                let Some(index) = shell
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.root == root)
+                else {
+                    return;
+                };
+                let Some(workspace) = shell.workspaces.get_mut(index) else {
+                    return;
+                };
+                if !workspace.finish_git_operation(&operation) {
+                    return;
+                }
+                if operation.cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                match result {
+                    Ok(message) => {
+                        shell.set_status(message);
+                        cx.notify();
+                        shell.scan_workspace(index, false, true, cx);
+                    }
+                    Err(err) => {
+                        shell.set_status(err);
+                        cx.notify();
+                        shell.scan_workspace(index, false, true, cx);
+                    }
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1084,6 +1254,7 @@ impl Shell {
             "no repository".to_string()
         };
         let active_changed = active_workspace.git.changed_count();
+        let active_incoming = active_workspace.git.behind.unwrap_or(0);
         let selected_tab = self.sidebar_tab;
         let shell = cx.entity();
 
@@ -1257,6 +1428,14 @@ impl Shell {
                             .when(active_changed > 0, |this| {
                                 this.child(rail_count_badge(active_changed, c, ui_zoom))
                             })
+                            .when(active_incoming > 0, |this| {
+                                this.child(rail_incoming_count_badge(
+                                    "rail-active-incoming",
+                                    active_incoming,
+                                    c,
+                                    ui_zoom,
+                                ))
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.sidebar_tab = SidebarTab::Git;
                                 this.shows_sidebar = true;
@@ -1296,6 +1475,7 @@ impl Shell {
                     .children(workspace_rail_rows(&self.workspaces, active).map(
                         |(index, workspace, selected)| {
                             let changed = workspace.git.changed_count();
+                            let incoming = workspace.git.behind.unwrap_or(0);
                             let name = workspace.name.clone();
                             let path = workspace.root.to_string_lossy().to_string();
                             let shell = shell.clone();
@@ -1340,6 +1520,14 @@ impl Shell {
                                         )
                                         .when(changed > 0, |this| {
                                             this.child(rail_count_badge(changed, c, ui_zoom))
+                                        })
+                                        .when(incoming > 0, |this| {
+                                            this.child(rail_incoming_count_badge(
+                                                ("workspace-incoming", index),
+                                                incoming,
+                                                c,
+                                                ui_zoom,
+                                            ))
                                         }),
                                 )
                                 .when(index < 9, |this| {
@@ -1635,6 +1823,30 @@ impl Shell {
         };
         let head = workspace.git.head_short.clone();
         let changed = workspace.git.changed_count();
+        let incoming = workspace.git.behind.unwrap_or(0);
+        let git_busy = workspace.git_operation_in_flight();
+        let fetching = workspace.fetching;
+        let can_fetch = workspace.git.is_repo && workspace.git.upstream.is_some() && !git_busy;
+        let can_pull = workspace.git.is_repo && workspace.git.upstream.is_some() && !git_busy;
+        let pulling = workspace.pulling;
+        let fetch_tooltip = if fetching {
+            "Fetching latest Git state"
+        } else if git_busy {
+            "Git operation in progress"
+        } else if workspace.git.upstream.is_some() {
+            "Fetch remote updates"
+        } else {
+            "No upstream configured"
+        };
+        let pull_tooltip = if pulling {
+            "Pulling latest code"
+        } else if git_busy {
+            "Git operation in progress"
+        } else if workspace.git.upstream.is_some() {
+            "Pull latest code"
+        } else {
+            "No upstream configured"
+        };
         let git_state = workspace.git.is_repo.then_some(if changed == 0 {
             (true, "Working Tree Clean")
         } else {
@@ -1711,6 +1923,86 @@ impl Shell {
                             .truncate()
                             .child(SharedString::from(branch)),
                     )
+                    .when(incoming > 0, |this| {
+                        this.child(incoming_count_badge(
+                            "status-incoming",
+                            incoming,
+                            c,
+                            ui_zoom,
+                        ))
+                    })
+                    .child(
+                        div()
+                            .id("status-fetch")
+                            .h(Metrics::COMPACT_CONTROL)
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .px(Space::XS)
+                            .rounded(Radius::ROW)
+                            .border_1()
+                            .border_color(if can_fetch {
+                                c.accent.opacity(0.55)
+                            } else {
+                                c.border
+                            })
+                            .text_color(if can_fetch { c.accent } else { c.ink_secondary })
+                            .when(can_fetch, |this| {
+                                this.cursor_pointer()
+                                    .hover(|this| this.bg(c.hover))
+                                    .active(|this| this.bg(c.pressed))
+                            })
+                            .when(!can_fetch, |this| this.opacity(0.6))
+                            .child(if fetching {
+                                Icon::new(IconName::Loader).xsmall()
+                            } else {
+                                Icon::new(IconName::Redo).xsmall()
+                            })
+                            .when(!condensed || fetching, |this| {
+                                this.child(if fetching { "Fetching..." } else { "Fetch" })
+                            })
+                            .tooltip_text(fetch_tooltip)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if can_fetch {
+                                    this.refresh_git_remote(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("status-pull-latest")
+                            .h(Metrics::COMPACT_CONTROL)
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .px(Space::XS)
+                            .rounded(Radius::ROW)
+                            .border_1()
+                            .border_color(if can_pull {
+                                c.accent.opacity(0.55)
+                            } else {
+                                c.border
+                            })
+                            .text_color(if can_pull { c.accent } else { c.ink_secondary })
+                            .when(can_pull, |this| {
+                                this.cursor_pointer()
+                                    .hover(|this| this.bg(c.hover))
+                                    .active(|this| this.bg(c.pressed))
+                            })
+                            .when(!can_pull, |this| this.opacity(0.6))
+                            .child(Icon::new(IconName::ArrowDown).xsmall())
+                            .when(!condensed || pulling, |this| {
+                                this.child(if pulling { "Pulling..." } else { "Pull latest" })
+                            })
+                            .tooltip_text(pull_tooltip)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if can_pull {
+                                    this.pull_latest(cx);
+                                }
+                            })),
+                    )
                     .when(!head.is_empty(), |this| {
                         this.child(
                             div()
@@ -1729,8 +2021,15 @@ impl Shell {
                 )
             })
             .child(div().flex_1().min_w(px(0.)))
-            .when_some(status.filter(|_| !condensed), |this, text| {
-                this.child(div().max_w(px(180.)).truncate().child(text))
+            .when_some(status, |this, text| {
+                this.child(
+                    div()
+                        .id("workspace-status-message")
+                        .max_w(px(if condensed { 100. } else { 240. }))
+                        .truncate()
+                        .tooltip_text(text.clone())
+                        .child(text),
+                )
             })
             .when_some(surface, |this, surface| this.child(div().child(surface)))
             .when_some(document_mode, |this, mode| this.child(div().child(mode)))

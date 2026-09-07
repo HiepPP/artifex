@@ -1320,3 +1320,187 @@ fn editor_double_click_range_covers_the_whole_identifier() {
     assert_eq!(token_range(line, 19), Some(16..26), "Unicode identifier");
     assert_eq!(token_range(line, 14), None, "whitespace selects nothing");
 }
+
+struct PullFixture {
+    seed: std::path::PathBuf,
+    local: std::path::PathBuf,
+}
+
+fn pull_git_output(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("git must be installed")
+}
+
+fn pull_git(dir: &std::path::Path, args: &[&str]) {
+    let output = pull_git_output(dir, args);
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn pull_fixture(label: &str) -> PullFixture {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let root = std::env::temp_dir().join(format!(
+        "artifex-git-pull-{}-{label}-{nonce}",
+        std::process::id()
+    ));
+    let seed = root.join("seed");
+    let local = root.join("local");
+    fs::create_dir_all(&seed).unwrap();
+
+    pull_git(&root, &["init", "-q", "--bare", "remote.git"]);
+    pull_git(&seed, &["init", "-q", "-b", "main"]);
+    pull_git(&seed, &["config", "user.email", "poc@example.com"]);
+    pull_git(&seed, &["config", "user.name", "POC"]);
+    fs::write(seed.join("tracked.txt"), "one\n").unwrap();
+    pull_git(&seed, &["add", "tracked.txt"]);
+    pull_git(&seed, &["commit", "-qm", "initial"]);
+    pull_git(&seed, &["remote", "add", "origin", "../remote.git"]);
+    pull_git(&seed, &["push", "-qu", "origin", "main"]);
+    pull_git(
+        &root,
+        &["clone", "-q", "--branch", "main", "remote.git", "local"],
+    );
+    pull_git(&local, &["config", "user.email", "poc@example.com"]);
+    pull_git(&local, &["config", "user.name", "POC"]);
+
+    PullFixture { seed, local }
+}
+
+fn push_seed_commit(fixture: &PullFixture, path: &str, contents: &str, subject: &str) {
+    fs::write(fixture.seed.join(path), contents).unwrap();
+    pull_git(&fixture.seed, &["add", "--", path]);
+    pull_git(&fixture.seed, &["commit", "-qm", subject]);
+    pull_git(&fixture.seed, &["push", "-q", "origin", "main"]);
+}
+
+#[test]
+fn git_snapshot_reports_locally_fetched_incoming_commits() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("snapshot-behind");
+    push_seed_commit(&fixture, "remote.txt", "remote\n", "remote change");
+
+    assert!(git::fetch_upstream(&fixture.local).is_ok());
+    let snapshot = git::snapshot(&fixture.local);
+    assert_eq!(snapshot.upstream.as_deref(), Some("origin/main"));
+    assert_eq!(snapshot.behind, Some(1));
+}
+
+#[test]
+fn git_pull_latest_fast_forwards_from_the_configured_upstream() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("pull-success");
+    push_seed_commit(&fixture, "remote.txt", "remote\n", "remote change");
+
+    assert!(git::pull_latest(&fixture.local).is_ok());
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("remote.txt")).unwrap(),
+        "remote\n"
+    );
+    assert_eq!(git::snapshot(&fixture.local).behind, Some(0));
+}
+
+#[test]
+fn git_pull_latest_rejects_divergence_without_changing_local_commit() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("pull-diverged");
+    fs::write(fixture.local.join("local.txt"), "local\n").unwrap();
+    pull_git(&fixture.local, &["add", "local.txt"]);
+    pull_git(&fixture.local, &["commit", "-qm", "local change"]);
+    push_seed_commit(&fixture, "remote.txt", "remote\n", "remote change");
+
+    let error = git::pull_latest(&fixture.local).expect_err("divergence must be rejected");
+    assert!(
+        error.to_ascii_lowercase().contains("fast-forward"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("local.txt")).unwrap(),
+        "local\n"
+    );
+    assert!(!fixture.local.join("remote.txt").exists());
+}
+
+#[test]
+fn git_pull_latest_requires_an_upstream() {
+    use crate::services::git;
+
+    let dir = temp_repo("pull-no-upstream");
+    let snapshot = git::snapshot(&dir);
+    assert_eq!(snapshot.upstream, None);
+    assert_eq!(snapshot.behind, None);
+    let pull_error = git::pull_latest(&dir).expect_err("missing upstream must fail");
+    assert!(pull_error.contains("no upstream"), "{pull_error}");
+    let fetch_error = git::fetch_upstream(&dir).expect_err("missing upstream must fail");
+    assert!(fetch_error.contains("no upstream"), "{fetch_error}");
+}
+
+#[test]
+fn git_snapshot_reports_unknown_when_tracking_ref_is_missing() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("snapshot-unknown");
+    pull_git(
+        &fixture.local,
+        &["update-ref", "-d", "refs/remotes/origin/main"],
+    );
+
+    let snapshot = git::snapshot(&fixture.local);
+    assert_eq!(snapshot.upstream.as_deref(), Some("origin/main"));
+    assert_eq!(snapshot.behind, None);
+}
+
+#[test]
+fn git_pull_latest_preserves_non_overlapping_dirty_files() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("pull-dirty");
+    push_seed_commit(&fixture, "remote.txt", "remote\n", "remote change");
+    fs::write(fixture.local.join("tracked.txt"), "local dirty\n").unwrap();
+
+    assert!(git::pull_latest(&fixture.local).is_ok());
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("tracked.txt")).unwrap(),
+        "local dirty\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("remote.txt")).unwrap(),
+        "remote\n"
+    );
+}
+
+#[test]
+fn git_pull_latest_rejects_overlapping_dirty_files_without_autostash() {
+    use crate::services::git;
+
+    let fixture = pull_fixture("pull-dirty-overlap");
+    push_seed_commit(&fixture, "tracked.txt", "remote\n", "remote change");
+    fs::write(fixture.local.join("tracked.txt"), "local dirty\n").unwrap();
+    pull_git(&fixture.local, &["config", "pull.rebase", "true"]);
+    pull_git(&fixture.local, &["config", "merge.autoStash", "true"]);
+    pull_git(&fixture.local, &["config", "rebase.autoStash", "true"]);
+
+    let error = git::pull_latest(&fixture.local).expect_err("overlapping dirty file must fail");
+    let lower = error.to_ascii_lowercase();
+    assert!(
+        lower.contains("local changes") || lower.contains("overwritten"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("tracked.txt")).unwrap(),
+        "local dirty\n"
+    );
+    let stash = pull_git_output(&fixture.local, &["stash", "list"]);
+    assert!(String::from_utf8_lossy(&stash.stdout).trim().is_empty());
+}

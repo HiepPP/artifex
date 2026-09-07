@@ -52,6 +52,13 @@ pub struct GitSnapshot {
     pub is_repo: bool,
     pub branch: String,
     pub head_short: String,
+    /// The configured remote-tracking branch, such as `origin/main`.
+    /// `None` means the current branch has no upstream configured.
+    pub upstream: Option<String>,
+    /// Number of commits present in the locally fetched upstream and absent
+    /// from HEAD. `None` means the upstream is configured but unavailable, or
+    /// the count could not be read.
+    pub behind: Option<usize>,
     pub staged: Vec<Change>,
     pub unstaged: Vec<Change>,
     pub commits: Vec<Commit>,
@@ -90,6 +97,8 @@ pub fn snapshot(root: &Path) -> GitSnapshot {
         .map(|id| id.to_hex_with_len(7).to_string())
         .unwrap_or_default();
 
+    let (upstream, behind) = incoming(&repo);
+
     let (staged, unstaged) = status(&repo);
     let commits = recent_commits(&repo, 12);
 
@@ -97,10 +106,57 @@ pub fn snapshot(root: &Path) -> GitSnapshot {
         is_repo: true,
         branch,
         head_short,
+        upstream,
+        behind,
         staged,
         unstaged,
         commits,
     }
+}
+
+/// Read the configured upstream and count commits that are only present in
+/// its locally fetched tracking ref. No network access occurs here.
+fn incoming(repo: &gix::Repository) -> (Option<String>, Option<usize>) {
+    let Some(head_name) = repo.head_name().ok().flatten() else {
+        return (None, None);
+    };
+    let Some(tracking_name) = repo
+        .branch_remote_tracking_ref_name(head_name.as_ref(), gix::remote::Direction::Fetch)
+        .and_then(Result::ok)
+    else {
+        return (None, None);
+    };
+    let upstream = tracking_name.shorten().to_string();
+    let Some(head_id) = repo.head_id().ok() else {
+        return (Some(upstream), None);
+    };
+    let Ok(tracking_ref) = repo.find_reference(tracking_name.as_ref()) else {
+        return (Some(upstream), None);
+    };
+    let Some(tracking_id) = tracking_ref.try_id() else {
+        return (Some(upstream), None);
+    };
+    if head_id == tracking_id {
+        return (Some(upstream), Some(0));
+    }
+    let Ok(walk) = repo.rev_walk([tracking_id]).with_hidden([head_id]).all() else {
+        return (Some(upstream), None);
+    };
+    // A full history walk is unavoidable for an exact count, but stop after a
+    // generous bound so a malformed or very large graph cannot block each
+    // snapshot forever. The UI treats the bounded case as unknown.
+    const MAX_INCOMING_COMMITS: usize = 100_000;
+    let mut behind = 0;
+    for info in walk {
+        if info.is_err() {
+            return (Some(upstream), None);
+        }
+        behind += 1;
+        if behind > MAX_INCOMING_COMMITS {
+            return (Some(upstream), None);
+        }
+    }
+    (Some(upstream), Some(behind))
 }
 
 /// Walks the first parents from HEAD. Read-only, like every other `gix` call
@@ -246,6 +302,68 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
     }
+}
+
+/// Resolve the configured fetch remote for the current branch through `gix`.
+/// The returned name is passed to the CLI only for the actual network write.
+fn configured_upstream_remote(root: &Path) -> Result<String, String> {
+    let repo = gix::discover(root).map_err(|_| "not a Git repository".to_string())?;
+    let head_name = repo
+        .head_name()
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "current HEAD is detached; no upstream configured".to_string())?;
+    if repo
+        .branch_remote_ref_name(head_name.as_ref(), gix::remote::Direction::Fetch)
+        .is_none()
+    {
+        return Err("no upstream configured for the current branch".to_string());
+    }
+    let remote = repo
+        .branch_remote_name(head_name.shorten(), gix::remote::Direction::Fetch)
+        .ok_or_else(|| "no fetch remote configured for the current branch".to_string())?;
+    let remote = remote.as_bstr().to_string();
+    if remote.trim().is_empty() {
+        return Err("configured upstream remote is empty".to_string());
+    }
+    Ok(remote)
+}
+
+/// Fetch the current branch's configured upstream into its local tracking ref.
+/// Filesystem refreshes must not call this; it is an explicit user action.
+pub fn fetch_upstream(root: &Path) -> Result<String, String> {
+    let remote = configured_upstream_remote(root)?;
+    let args = ["fetch", remote.as_str()];
+    git(root, &args)
+        .map(|_| format!("fetched {remote}"))
+        .map_err(|err| format!("fetch failed: {}", err.trim()))
+}
+
+/// Fetch and fast-forward the current branch from its configured upstream.
+/// Explicit options disable configured autostash/rebase behavior and prevent
+/// merge commits. Git itself preserves non-overlapping dirty files.
+pub fn pull_latest(root: &Path) -> Result<String, String> {
+    let _ = configured_upstream_remote(root)?;
+    let args = [
+        "-c",
+        "pull.autostash=false",
+        "-c",
+        "rebase.autoStash=false",
+        "-c",
+        "merge.autoStash=false",
+        "pull",
+        "--no-rebase",
+        "--ff-only",
+    ];
+    git(root, &args)
+        .map(|output| {
+            let output = output.trim();
+            if output.is_empty() {
+                "pulled latest".to_string()
+            } else {
+                output.to_string()
+            }
+        })
+        .map_err(|err| format!("pull failed: {}", err.trim()))
 }
 
 pub fn stage(root: &Path, path: &str) -> Result<(), String> {

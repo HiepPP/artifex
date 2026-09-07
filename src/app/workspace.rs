@@ -148,6 +148,23 @@ pub struct ExplorerInventoryRequest {
     cancel: Arc<AtomicBool>,
 }
 
+/// The one Git mutation allowed to run for a workspace at a time.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitOperationKind {
+    Pull,
+    Fetch,
+}
+
+/// Identity for a background Git operation. The generation prevents an old
+/// result from winning after a newer operation, while the token distinguishes
+/// a workspace that was closed and reopened at the same root.
+#[derive(Clone)]
+pub(crate) struct GitOperation {
+    pub(crate) kind: GitOperationKind,
+    pub(crate) generation: u64,
+    pub(crate) cancel: Arc<AtomicBool>,
+}
+
 impl ExplorerInventoryRequest {
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
@@ -231,6 +248,10 @@ pub struct Workspace {
     explorer_inventory_running: bool,
     explorer_inventory_cancel: Arc<AtomicBool>,
     pub pushing: bool,
+    pub pulling: bool,
+    pub fetching: bool,
+    git_operation_generation: u64,
+    git_operation_cancel: Arc<AtomicBool>,
     pub scan: ScanState,
     /// File navigation history. `back` holds files left behind, `forward`
     /// holds files backed out of; any plain open clears `forward`.
@@ -277,6 +298,10 @@ impl Workspace {
             explorer_inventory_running: false,
             explorer_inventory_cancel: Arc::new(AtomicBool::new(false)),
             pushing: false,
+            pulling: false,
+            fetching: false,
+            git_operation_generation: 0,
+            git_operation_cancel: Arc::new(AtomicBool::new(false)),
             scan: ScanState::default(),
             back: Vec::new(),
             forward: Vec::new(),
@@ -305,6 +330,89 @@ impl Workspace {
 
     pub fn refresh_git(&mut self) {
         self.git = git::snapshot(&self.root);
+    }
+
+    /// Returns whether any open editor has a buffer that would be overwritten
+    /// by a fast-forward pull.
+    pub fn has_unsaved_editors(&self, cx: &App) -> bool {
+        self.tabs.iter().any(|tab| match &tab.kind {
+            TabKind::File { editor, .. } => editor.read(cx).dirty,
+            _ => false,
+        })
+    }
+
+    pub(crate) fn git_operation_in_flight(&self) -> bool {
+        self.pushing || self.pulling || self.fetching
+    }
+
+    pub(crate) fn begin_git_operation(&mut self, kind: GitOperationKind) -> Option<GitOperation> {
+        if self.git_operation_in_flight() {
+            return None;
+        }
+        self.git_operation_generation = self.git_operation_generation.wrapping_add(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.git_operation_cancel = cancel.clone();
+        match kind {
+            GitOperationKind::Pull => self.pulling = true,
+            GitOperationKind::Fetch => self.fetching = true,
+        }
+        Some(GitOperation {
+            kind,
+            generation: self.git_operation_generation,
+            cancel,
+        })
+    }
+
+    /// Completes an operation only when its workspace instance is still the
+    /// owner of the result. A stale result must not clear a newer operation.
+    pub(crate) fn finish_git_operation(&mut self, operation: &GitOperation) -> bool {
+        if self.git_operation_generation != operation.generation
+            || !Arc::ptr_eq(&self.git_operation_cancel, &operation.cancel)
+        {
+            return false;
+        }
+        match operation.kind {
+            GitOperationKind::Pull => self.pulling = false,
+            GitOperationKind::Fetch => self.fetching = false,
+        }
+        true
+    }
+
+    /// Reopen clean file entities after a pull so their in-memory buffers
+    /// cannot overwrite the fast-forwarded files on a later save. A buffer can
+    /// become dirty while the background pull is running; leave it alone and
+    /// let the caller report that it needs reconciliation.
+    pub(crate) fn reload_clean_file_views(&mut self, cx: &mut App) -> bool {
+        let mut skipped_dirty = false;
+        for tab in &mut self.tabs {
+            let TabKind::File {
+                path,
+                editor,
+                preview_view,
+                ..
+            } = &mut tab.kind
+            else {
+                continue;
+            };
+            if editor.read(cx).dirty {
+                skipped_dirty = true;
+                continue;
+            }
+            *editor = EditorView::open(path.clone(), cx);
+            if let Some(preview) = preview_view {
+                match preview {
+                    PreviewKind::Markdown(view) => {
+                        *view = MarkdownView::open(path.clone(), cx);
+                    }
+                    PreviewKind::Web(view) => {
+                        view.update(cx, |view, _| {
+                            view.load_url(&format!("file://{}", path.display()));
+                        });
+                    }
+                }
+            }
+        }
+        skipped_dirty
     }
 
     pub fn reindex(&mut self) {
@@ -642,5 +750,6 @@ impl Drop for Workspace {
     fn drop(&mut self) {
         self.explorer_inventory_cancel
             .store(true, Ordering::Relaxed);
+        self.git_operation_cancel.store(true, Ordering::Relaxed);
     }
 }

@@ -13,7 +13,9 @@ use gpui::{
 use gpui_component::input::{Input, InputEvent};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::app::chrome::{file_glyph, folder_glyph, icon_button};
+use crate::app::chrome::{
+    QuietTooltip, count_badge, file_glyph, folder_glyph, icon_button, incoming_count_badge,
+};
 use crate::app::shell::{Shell, SidebarTab};
 use crate::app::workspace::{ExplorerInventoryEntry, Workspace, build_explorer_inventory};
 use crate::services::fs_tree::Row;
@@ -232,6 +234,7 @@ impl Shell {
         let ui_zoom = self.ui_zoom;
         let tab = self.sidebar_tab;
         let changed = self.workspace().git.changed_count();
+        let incoming = self.workspace().git.behind.unwrap_or(0);
         let (title, icon) = match tab {
             SidebarTab::Explorer => ("Files", IconName::Folder),
             SidebarTab::Git => ("Changes", IconName::Network),
@@ -262,13 +265,15 @@ impl Shell {
                             .child(title),
                     )
                     .when(tab == SidebarTab::Git && changed > 0, |this| {
-                        this.child(
-                            div()
-                                .font_family("JetBrains Mono")
-                                .text_size(Type::MICRO * ui_zoom)
-                                .text_color(c.git_modified)
-                                .child(SharedString::from(changed.to_string())),
-                        )
+                        this.child(count_badge(changed, c.git_modified, c, ui_zoom))
+                    })
+                    .when(tab == SidebarTab::Git && incoming > 0, |this| {
+                        this.child(incoming_count_badge(
+                            "sidebar-incoming-count",
+                            incoming,
+                            c,
+                            ui_zoom,
+                        ))
                     }),
             )
             .child(match tab {
@@ -509,6 +514,11 @@ impl Shell {
         let short_root = shorten_path(&root);
         let commit_input = self.workspace().commit_input.clone();
         let pushing = self.workspace().pushing;
+        let pulling = self.workspace().pulling;
+        let fetching = self.workspace().fetching;
+        let incoming = snapshot.behind.unwrap_or(0);
+        let git_busy = pulling || fetching || pushing;
+        let can_pull = snapshot.upstream.is_some() && !git_busy;
 
         v_flex()
             .id("git-scroll")
@@ -526,6 +536,9 @@ impl Shell {
                     .child(icon_button("stage-all", IconName::Check, false, c, {
                         let root = root.clone();
                         cx.listener(move |this, _, _, cx| {
+                            if this.workspace().git_operation_in_flight() {
+                                return;
+                            }
                             match git::stage_all(&root) {
                                 Ok(()) => this.set_status("staged all"),
                                 Err(err) => this.set_status(err),
@@ -536,13 +549,20 @@ impl Shell {
                     }))
                     .child(icon_button(
                         "refresh-git",
-                        IconName::Redo,
+                        if fetching {
+                            IconName::Loader
+                        } else {
+                            IconName::Redo
+                        },
                         false,
                         c,
                         cx.listener(|this, _, _, cx| {
-                            this.workspace_mut().refresh_git();
-                            this.set_status("git refreshed");
-                            cx.notify();
+                            if !this.workspace().pulling
+                                && !this.workspace().fetching
+                                && !this.workspace().pushing
+                            {
+                                this.refresh_git_remote(cx);
+                            }
                         }),
                     )),
             )
@@ -608,6 +628,64 @@ impl Shell {
                                         .font_family("JetBrains Mono")
                                         .text_size(Type::MICRO * ui_zoom)
                                         .child(SharedString::from(snapshot.branch.clone())),
+                                )
+                                .when(incoming > 0, |this| {
+                                    this.child(incoming_count_badge(
+                                        "git-card-incoming-count",
+                                        incoming,
+                                        c,
+                                        ui_zoom,
+                                    ))
+                                })
+                                .child(
+                                    div()
+                                        .id("pull-latest")
+                                        .h(Metrics::COMPACT_CONTROL)
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .px(Space::S)
+                                        .rounded(Radius::ROW)
+                                        .border_1()
+                                        .border_color(if can_pull {
+                                            c.accent.opacity(0.55)
+                                        } else {
+                                            c.border
+                                        })
+                                        .text_size(Type::CAPTION * ui_zoom)
+                                        .text_color(if can_pull {
+                                            c.accent
+                                        } else {
+                                            c.ink_secondary
+                                        })
+                                        .when(can_pull, |this| {
+                                            this.cursor_pointer()
+                                                .hover(|this| this.bg(c.hover))
+                                                .active(|this| this.bg(c.pressed))
+                                        })
+                                        .when(!can_pull, |this| this.opacity(0.55))
+                                        .child(if pulling {
+                                            "Pulling..."
+                                        } else if fetching {
+                                            "Fetching..."
+                                        } else {
+                                            "Pull latest"
+                                        })
+                                        .tooltip_text(if pulling {
+                                            "Pulling latest code"
+                                        } else if fetching {
+                                            "Fetching latest Git state"
+                                        } else if snapshot.upstream.is_some() {
+                                            "Pull latest code"
+                                        } else {
+                                            "No upstream configured"
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if can_pull {
+                                                this.pull_latest(cx);
+                                            }
+                                        })),
                                 ),
                         ),
                 )
@@ -819,6 +897,9 @@ impl Shell {
                                         c.ink_secondary,
                                         c,
                                         cx.listener(move |this, _, _, cx| {
+                                            if this.workspace().git_operation_in_flight() {
+                                                return;
+                                            }
                                             for (path, _) in &items {
                                                 let _ = git::unstage(&dir_root, path);
                                             }
@@ -984,6 +1065,9 @@ impl Shell {
                                         c.ink_secondary,
                                         c,
                                         cx.listener(move |this, _, _, cx| {
+                                            if this.workspace().git_operation_in_flight() {
+                                                return;
+                                            }
                                             cx.stop_propagation();
                                             let result = if staged {
                                                 git::unstage(&stage_root, &stage_path)
@@ -1023,6 +1107,9 @@ impl Shell {
         root: PathBuf,
         cx: &mut Context<Self>,
     ) {
+        if self.workspace().git_operation_in_flight() {
+            return;
+        }
         if self.discard_armed.as_ref() == Some(&key) {
             // Second click on the same row: run the destructive discard.
             self.discard_armed = None;

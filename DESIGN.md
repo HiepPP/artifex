@@ -422,6 +422,9 @@ Geometry rules:
 - Show the changed-file count as a trailing high-contrast badge when it is above
   zero. Count each path once across staged, unstaged, and untracked states.
 - Show non-zero per-workspace change counts with the same badge treatment.
+- Show non-zero incoming commit counts beside change counts on `Changes` and
+  workspace rows. Use a separate rounded pill with a down arrow and a distinct
+  semantic tint; never combine commits and changed files into one number.
 - Mark the active workspace with label weight and one selection fill. No
   checkmark, no leading accent bar, no floating card.
 - `Add Workspace` opens the native folder panel. It starts at `~/Projects`,
@@ -692,6 +695,16 @@ instead of promising a key that cannot arrive.
   short hash.
 - Push is one primary control: stage everything, commit the composer subject,
   then push the current branch. Report which stage failed.
+- Add `Pull latest` beside the branch in the repository card and status bar.
+  Fetch the configured upstream, then fast-forward only. Never auto-stash,
+  rebase, or create a merge commit. Refuse pull with unsaved editor buffers;
+  preserve working-tree changes and show actionable failures.
+- Read incoming commit counts against the configured upstream. Counts reflect
+  locally fetched refs; the Git refresh control fetches the upstream before
+  refreshing the snapshot. Do not fetch on filesystem events.
+- Run fetch and pull off the UI thread, show progress, and prevent overlapping
+  Git operations. Refresh Git and file state after pull; ignore results for
+  closed or replaced workspaces. Disable pull without an upstream.
 - Open file diffs as center tabs, never inside the sidebar.
 - Omit raw git metadata from a diff preview: `diff --git`, `index`, `---`,
   `+++`, mode lines, rename/similarity lines, and `\ No newline` markers.
@@ -724,13 +737,18 @@ instead of promising a key that cannot arrive.
 - On an HTML text diff, the Preview toggle opens the working-tree file
   rendered in the web preview.
 
-Divergence: no branch picker, no discard, no upstream counts, and no
+Divergence: no branch picker, no discard, and no
 commit-message generation.
 
 ### Workspace Status
 
 - Keep the status bar at 28 points. The leading group shows branch, short HEAD,
   and changed count from the live Git snapshot.
+- Place compact `Fetch` and `Pull latest` controls beside the branch, with
+  `Fetch` immediately to the left of `Pull latest`. Fetch updates the local
+  remote-tracking ref and the incoming count without changing the working tree;
+  Pull fast-forwards the working tree. Show the incoming count when non-zero.
+  Explain disabled and loading states with tooltips.
 - The trailing group identifies the active surface with real state: file type
   or language, Preview or Raw mode when available, line-ending mode for text,
   working-tree clean or dirty state, content token estimate, and content zoom.
