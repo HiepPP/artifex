@@ -157,7 +157,7 @@ fn read_dir(path: &Path) -> Vec<Entry> {
             if HARD_IGNORES.contains(&name.as_str()) {
                 return None;
             }
-            let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let is_dir = item.path().is_dir();
             Some(Entry {
                 path: item.path(),
                 name,

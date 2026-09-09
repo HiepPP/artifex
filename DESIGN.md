@@ -451,6 +451,10 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Explorer rows are 32 points: chevron, identity icon, label. Treat the whole
   row, including its trailing empty area, as one pointer-cursor hit target.
 - Render Git-ignored entries at reduced opacity, and keep them visible.
+- Expand symlinked folders like local folders; open their files through the symlink path.
+- Keep symlinks and their contents at full contrast; mark the link itself with a small arrow icon.
+- Symlink names use medium-weight accent text on an 8% accent tint, rising to
+  16% on hover. Selection keeps its standard highlight. Descendants retain normal styling.
 - An Explorer single click opens one replaceable preview tab. Opening another
   file with a single click replaces that preview in place, so browsing never
   fills the strip. A double click opens a permanent tab, or promotes the preview

@@ -418,7 +418,17 @@ impl Shell {
                                         let indent = px(8. + row.depth as f32 * 12.);
                                         let is_selected =
                                             selected.as_deref() == Some(path.as_path());
-                                        let ignored = workspace.is_ignored(&path);
+                                        let is_symlink = path.is_symlink();
+                                        let through_symlink = is_symlink
+                                            || path
+                                                .ancestors()
+                                                .skip(1)
+                                                .take_while(|parent| {
+                                                    parent.starts_with(&workspace.root)
+                                                })
+                                                .any(Path::is_symlink);
+                                        let ignored =
+                                            !through_symlink && workspace.is_ignored(&path);
                                         let glyph = if is_dir {
                                             folder_glyph(&row.name, expanded, light)
                                         } else {
@@ -434,8 +444,19 @@ impl Shell {
                                             .pl(indent)
                                             .pr(Space::S)
                                             .rounded(Radius::ROW)
+                                            .when(is_symlink, |this| {
+                                                this.bg(colors.accent.opacity(0.08))
+                                            })
                                             .when(is_selected, |this| this.bg(colors.selection))
-                                            .hover(|this| this.bg(colors.hover))
+                                            .hover(|this| {
+                                                this.bg(if is_symlink && is_selected {
+                                                    colors.selection
+                                                } else if is_symlink {
+                                                    colors.accent.opacity(0.16)
+                                                } else {
+                                                    colors.hover
+                                                })
+                                            })
                                             .child(
                                                 div()
                                                     .w(px(14.))
@@ -468,8 +489,19 @@ impl Shell {
                                                     .truncate()
                                                     .text_size(Type::BODY * ui_zoom)
                                                     .text_color(colors.file_tree_foreground)
+                                                    .when(is_symlink, |this| {
+                                                        this.text_color(colors.accent)
+                                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                                    })
                                                     .child(SharedString::from(row.name.clone())),
                                             )
+                                            .when(is_symlink, |this| {
+                                                this.child(
+                                                    Icon::new(IconName::ExternalLink)
+                                                        .xsmall()
+                                                        .text_color(colors.accent),
+                                                )
+                                            })
                                             .when(ignored, |this| this.opacity(0.45))
                                             .on_click({
                                                 let entity = entity.clone();

@@ -121,6 +121,36 @@ fn file_tree_expands_lazily() {
 }
 
 #[test]
+fn file_tree_expands_symlinked_folders_and_reads_files() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("artifex-symlink-{}", std::process::id()));
+    fs::create_dir_all(dir.join("target/nested")).unwrap();
+    fs::create_dir_all(dir.join("workspace")).unwrap();
+    fs::write(dir.join("target/nested/file.txt"), "linked content").unwrap();
+    let linked = dir.join("workspace/linked");
+    symlink("../target", &linked).unwrap();
+    let mut tree = fs_tree::FileTree::new(dir.join("workspace"));
+    assert!(
+        tree.rows
+            .iter()
+            .any(|row| row.entry.path == linked && row.entry.is_dir)
+    );
+    tree.toggle(&linked);
+    tree.toggle(&linked.join("nested"));
+    let file = tree
+        .rows
+        .iter()
+        .find(|row| row.entry.path == linked.join("nested/file.txt"))
+        .unwrap();
+    assert!(!file.entry.is_dir);
+    assert_eq!(fs::read_to_string(&file.entry.path).unwrap(), "linked content");
+    tree.toggle(&linked);
+    assert_eq!(tree.rows.len(), 1);
+    fs::remove_file(linked).unwrap();
+}
+
+#[test]
 fn file_index_skips_ignored_trees() {
     let dir = fixture_dir();
     let files = file_index::build(&dir);
