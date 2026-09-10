@@ -156,14 +156,14 @@ Rules:
 | `ROW` | 28 | Dense Git rows and center tabs |
 | `TREE_ROW` | 32 | Explorer file and folder rows |
 | `RAIL_WIDTH` | 230 | Workspace rail |
-| `RAIL_ITEM_HEIGHT` | 44 | Two-line workspace row |
+| `RAIL_ITEM_HEIGHT` | 52 | Two-line workspace row |
 | `RAIL_ITEM_GAP` | 4 | Space between workspace rows |
 | `PROJECT_MENU_WIDTH` | 568 | Global search trigger |
 | `PALETTE_WIDTH` | 640 | Quick Open and Command Palette |
 | `PALETTE_HEIGHT` | 410 | Quick Open and Command Palette |
 | `PALETTE_FIELD` | 52 | Overlay query field |
 | `TITLE_BAR` | 28 | Reserve under the transparent title bar |
-| `PROSE_WIDTH` | 980 | Markdown column, GitHub `.markdown-body` measure |
+| `PROSE_WIDTH` | 1400 | Maximum Markdown column, matching the Warm Slate reader |
 | `VIEWPORT_PADDING` | 32 | Markdown document inset on every side |
 | `CONTEXT_WIDTH` | 300 | Wide-layout context rail |
 
@@ -180,16 +180,16 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 | Token | Light | Dark | Role |
 |---|---|---|---|
 | `toolbar` | `#28343D` | `#202A32` | Global Reading Room toolbar in both appearances |
-| `chrome` | `#EAE6DF` | `#252B31` | Toolbar, headers, status, tab strip |
-| `canvas` | `#EAE6DF` | `#1D2329` | Window and empty-state background |
-| `sidebar` | `#EAE6DF` | `#252B31` | Explorer, Git, and inspector bases |
+| `chrome` | `#EEEAE4` | `#252B31` | Toolbar, headers, status, tab strip |
+| `canvas` | `#EEEAE4` | `#1D2329` | Window and empty-state background |
+| `sidebar` | `#EEEAE4` | `#252B31` | Explorer, Git, and inspector bases |
 | `panel` | `#F3F0EB` | `#292F35` | Cards and local panel content |
 | `raised` | `#E0DCD5` | `#343D45` | Raised controls and palette body |
-| `editor` | `#FCFAF6` | `#1C2228` | Editor, code, and terminal base |
+| `editor` | `#FCFAF7` | `#1C2228` | Editor, code, and terminal base |
 | `tab_inactive` | `#F0EDE7` | `#252B31` | Inactive tabs |
 | `border` | `#D7D2CA` | `#3C464F` | Dividers and control outlines |
 | `selection` | `#E7D5CA` | `#4B3730` | Selected rows |
-| `chrome_selection` | `#FCFAF6` | `#343D45` | Warm glass selection for chrome tabs |
+| `chrome_selection` | `#FCFAF7` | `#343D45` | Warm glass selection for chrome tabs |
 | `chrome_selection_ink` | `#2B2724` | `#F2EFEA` | Text and icons on selected chrome tabs |
 | `hover` | `#D8D4CD` | `#383C41` | Hover state |
 | `pressed` | `#CCC7BF` | `#44494F` | Pressed state |
@@ -204,7 +204,7 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 | `rail_bottom` | `#2E3B44` | `#26343D` | Lower petrol rail gradient stop |
 | `rail_solid` | `#28343D` | `#202A32` | Flat rail fallback |
 | `rail_foreground` | `#F3F1EC` | `#F3F1EC` | Text and icons on the rail |
-| `rail_secondary` | `#B6BEC3` | `#ADB7BD` | Rail metadata |
+| `rail_secondary` | `#C3CBD0` | `#ADB7BD` | Rail metadata |
 | `rail_selection` | `#46545E` | `#3C4A54` | Active rail row fill |
 | `rail_hover` | `#35434D` | `#2D3B45` | Rail hover fill |
 | `rail_pressed` | `#43525D` | `#3A4954` | Rail pressed fill |
@@ -215,7 +215,7 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 | `git_deleted` | `#A13E37` | `#E17B70` | Deletions and destructive state |
 | `git_untracked` | `#286E68` | `#63C3B8` | Untracked state |
 | `ink` | `#262932` | `#E9E5DF` | Primary label |
-| `ink_secondary` | `#62636B` | `#A7A5A1` | Secondary label |
+| `ink_secondary` | `#555C63` | `#A7A5A1` | Secondary label |
 
 Color rules:
 
@@ -261,12 +261,12 @@ Depth rules:
 
 | Token | Size | Typical use |
 |---|---:|---|
-| `MICRO` | 11 | Shortcuts, metadata, compact badges |
-| `CAPTION` | 12 | Secondary labels |
-| `LABEL` | 12.5 | Tabs and compact actions |
-| `BODY` | 13.5 | Main UI copy |
-| `UI` | 14 | Fields and standard interface text |
-| `HEADLINE` | 16 | Panel headers |
+| `MICRO` | 12 | Shortcuts, metadata, compact badges |
+| `CAPTION` | 14 | Secondary labels |
+| `LABEL` | 15 | Tabs and compact actions |
+| `BODY` | 16 | Main UI copy |
+| `UI` | 16 | Fields and standard interface text |
+| `HEADLINE` | 18 | Panel headers |
 | `TITLE` | 17 | Section titles and strong empty states |
 | `DISPLAY` | 24 | Large empty-state titles |
 | `EDITOR` | 16 | Every content surface: editor, diff, terminal, Markdown body |
@@ -416,9 +416,9 @@ Geometry rules:
 - Render every workspace exactly once in stored rail order. Selecting a
   workspace changes only the active marker and mounted content; it never removes
   or repositions a row. The `Workspaces` count includes the active workspace.
-- Each row is 44 points with 4-point gaps: the full project name on the first
+- Each row is 52 points with 4-point gaps: the full project name on the first
   line, its `Cmd-1` .. `Cmd-9` shortcut in smaller monospaced secondary text on
-  the second. Add a 28-point initial well before the label; never show paths.
+  the second. Add a 36-point initial well before the label; never show paths.
   Use the first alphabetic character, uppercased, with `A` as fallback.
 - Positions past nine stay reachable without a shortcut.
 - Show the changed-file count as a trailing high-contrast badge when it is above
@@ -430,7 +430,7 @@ Geometry rules:
 - Mark the active workspace with label weight and a terracotta-tinted slate
   fill. Its initial well uses accent with `accent_ink` text; inactive wells use
   the rail hover fill with rail foreground text.
-  No checkmark, leading accent bar, or shadow.
+  No leading accent bar, checkmark, or shadow.
 - `Add Workspace` opens the native folder panel. It starts at `~/Projects`,
   and falls back to home when that folder does not exist.
   Choosing a folder already open selects that workspace instead of adding a
@@ -468,10 +468,11 @@ of inactive sessions. Every workspace stays fully live for the run.
 
 ### Center Tabs
 
-- One paper-colored center frame with 12-point inset and corner radius, a
-  hairline border and soft shadow. Locator, tabs, and content share that frame.
+- One paper-colored center frame with an 8-point inset, 6-point corner radius,
+  and hairline border at 60 percent opacity. No shadow. Locator, tabs, and
+  content share that frame.
   In Compact mode reduce the inset to 4 points to preserve content width.
-- Keep the locator background transparent and reserve 12 points below content:
+- Keep the locator background transparent and reserve 6 points below content:
   GPUI clips children to a rectangle, not the frame's rounded corners.
 - Use a 36-point locator row followed by a 44-point tab and action row. This
   keeps orientation visible without spending 120 points on passive chrome.
@@ -509,7 +510,9 @@ of inactive sessions. Every workspace stays fully live for the run.
   mode. The rail scrolls as one surface and uses sticky visual sections.
 - The context rail has no repeated file-identity header. For Markdown, its first
   visible section is `On This Page`. Each heading scrolls the document to
-  its block. Then show local linked files that resolve inside the workspace.
+  its block. The active heading uses a soft accent fill and a leading accent rule,
+  retaining its existing weight and indentation. Then show local linked files
+  that resolve inside the workspace.
   Each linked-file row carries a small trailing role label derived from the
   file name: `manifest`, `entry point`, `source`, `config`, or a document's
   lowercase stem.
@@ -603,11 +606,11 @@ its Warm Slate frame read as one surface.
 - Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
 - Treat leading YAML frontmatter as metadata: omit it from Preview and keep it
   visible in Source.
-- Surface: paper `#FCFAF6` / dark `#1C2228`; text `#1F2328` / `#F0F6FC`;
+- Surface: paper `#FCFAF7` / dark `#1C2228`; text `#1F2328` / `#F0F6FC`;
   muted `#59636E` / `#9198A1`; borders `#D1D9E0` / `#3D444D`; subtle fill
   `#F6F8FA` / `#151B23`. Content colors live in `markdown.rs` as the Primer palette;
   the base surface and link blue (`#0969DA` / `#4493F8`) are shared tokens.
-- One 980-point column with 32 points of padding on every side, in every
+- One column up to 1400 points with 32 points of padding on every side, in every
   layout mode. Tables and code share the prose column; nothing bleeds.
 - Prose blocks (heading, paragraph, list item, quote) reparse their inline
   Markdown into `StyledText` runs. Each run carries its own font, so code

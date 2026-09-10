@@ -28,9 +28,9 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use crate::services::highlight::{Highlighter, Lang, line_starts};
 use crate::theme::{ActiveTokens as _, Colors, EditorZoom, Space, Type};
 
-/// GitHub renders `.markdown-body` on a 980-point measure with 32 points of
-/// padding; every block, including tables and code, shares the one column.
-const PROSE_WIDTH: f32 = 980.;
+/// The Warm Slate reader uses the available width up to 1400 points; every
+/// block, including tables and code, shares the same padded column.
+const PROSE_WIDTH: f32 = 1400.;
 const BLEED_WIDTH: f32 = PROSE_WIDTH;
 const VIEWPORT_PADDING: Pixels = px(32.);
 

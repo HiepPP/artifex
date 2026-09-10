@@ -25,7 +25,7 @@ impl Shell {
             .p(if self.layout == LayoutMode::Compact {
                 Space::XS
             } else {
-                Space::M
+                Space::S
             })
             .bg(c.canvas)
             .child(
@@ -34,13 +34,12 @@ impl Shell {
                     .w_full()
                     .min_h(px(0.))
                     .min_w(px(0.))
-                    .rounded(Radius::PANEL)
+                    .rounded(Radius::ROW)
                     // GPUI clips children rectangularly; keep opaque content above the corners.
-                    .pb(Radius::PANEL)
+                    .pb(Radius::ROW)
                     .border_1()
-                    .border_color(c.border)
+                    .border_color(c.border.opacity(0.6))
                     .bg(c.editor)
-                    .shadow(crate::app::chrome::shadow_soft())
                     .overflow_hidden()
                     .child(self.render_tab_strip(cx))
                     .child(self.render_tab_content(cx)),

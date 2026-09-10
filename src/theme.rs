@@ -55,16 +55,16 @@ macro_rules! tokens {
 
 tokens! {
     toolbar                 = (0x28343D, 0x202A32);
-    chrome                  = (0xEAE6DF, 0x252B31);
-    canvas                  = (0xEAE6DF, 0x1D2329);
-    sidebar                 = (0xEAE6DF, 0x252B31);
+    chrome                  = (0xEEEAE4, 0x252B31);
+    canvas                  = (0xEEEAE4, 0x1D2329);
+    sidebar                 = (0xEEEAE4, 0x252B31);
     panel                   = (0xF3F0EB, 0x292F35);
     raised                  = (0xE0DCD5, 0x343D45);
-    editor                  = (0xFCFAF6, 0x1C2228);
+    editor                  = (0xFCFAF7, 0x1C2228);
     tab_inactive            = (0xF0EDE7, 0x252B31);
     border                  = (0xD7D2CA, 0x3C464F);
     selection               = (0xE7D5CA, 0x4B3730);
-    chrome_selection        = (0xFCFAF6, 0x343D45);
+    chrome_selection        = (0xFCFAF7, 0x343D45);
     chrome_selection_ink    = (0x2B2724, 0xF2EFEA);
     hover                   = (0xD8D4CD, 0x383C41);
     pressed                 = (0xCCC7BF, 0x44494F);
@@ -80,7 +80,7 @@ tokens! {
     rail_bottom             = (0x2E3B44, 0x26343D);
     rail_solid              = (0x28343D, 0x202A32);
     rail_foreground         = (0xF3F1EC, 0xF3F1EC);
-    rail_secondary          = (0xB6BEC3, 0xADB7BD);
+    rail_secondary          = (0xC3CBD0, 0xADB7BD);
     rail_selection          = (0x46545E, 0x3C4A54);
     rail_hover              = (0x35434D, 0x2D3B45);
     rail_pressed            = (0x43525D, 0x3A4954);
@@ -93,7 +93,7 @@ tokens! {
     // Label colours. DESIGN.md defers to the native label colours; the POC
     // pins the two levels it needs so the surfaces stay legible on both bases.
     ink                     = (0x262932, 0xE9E5DF);
-    ink_secondary           = (0x62636B, 0xA7A5A1);
+    ink_secondary           = (0x555C63, 0xA7A5A1);
 }
 
 /// `DESIGN.md` > Spacing and Shape Tokens.
@@ -130,7 +130,7 @@ impl Metrics {
     pub const ROW: Pixels = px(28.);
     pub const TREE_ROW: Pixels = px(32.);
     pub const RAIL_WIDTH: Pixels = px(230.);
-    pub const RAIL_ITEM_HEIGHT: Pixels = px(44.);
+    pub const RAIL_ITEM_HEIGHT: Pixels = px(52.);
     pub const RAIL_ITEM_GAP: Pixels = px(4.);
 
     pub const SIDEBAR_MIN: Pixels = px(288.);
@@ -159,12 +159,12 @@ impl Metrics {
 /// `DESIGN.md` > Typography.
 pub struct Type;
 impl Type {
-    pub const MICRO: Pixels = px(11.);
-    pub const CAPTION: Pixels = px(12.);
-    pub const LABEL: Pixels = px(12.5);
-    pub const BODY: Pixels = px(13.5);
-    pub const UI: Pixels = px(14.);
-    pub const HEADLINE: Pixels = px(16.);
+    pub const MICRO: Pixels = px(12.);
+    pub const CAPTION: Pixels = px(14.);
+    pub const LABEL: Pixels = px(15.);
+    pub const BODY: Pixels = px(16.);
+    pub const UI: Pixels = px(16.);
+    pub const HEADLINE: Pixels = px(18.);
     pub const TITLE: Pixels = px(17.);
     pub const DISPLAY: Pixels = px(24.);
     pub const EDITOR: Pixels = px(16.);

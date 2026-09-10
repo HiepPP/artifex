@@ -1355,6 +1355,7 @@ impl Shell {
                                             let preview = preview.clone();
                                             h_flex()
                                                 .id(("context-outline", index))
+                                                .relative()
                                                 .h(px(28.))
                                                 .w_full()
                                                 .cursor_pointer()
@@ -1372,6 +1373,16 @@ impl Shell {
                                                 })
                                                 .when(active, |this| {
                                                     this.font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .bg(c.accent.opacity(0.10))
+                                                        .child(
+                                                            div()
+                                                                .absolute()
+                                                                .left_0()
+                                                                .top(Space::XS)
+                                                                .bottom(Space::XS)
+                                                                .w(px(2.))
+                                                                .bg(c.accent),
+                                                        )
                                                 })
                                                 .hover(|this| this.bg(c.raised))
                                                 .child(

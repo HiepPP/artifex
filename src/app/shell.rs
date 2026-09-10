@@ -1537,10 +1537,12 @@ impl Shell {
                                 })
                                 .child(
                                     div()
-                                        .size(Metrics::CONTROL)
+                                        .size(Metrics::READER_LOCATOR)
                                         .flex_none()
                                         .rounded(Radius::ROW)
-                                        .bg(if selected { c.accent } else { c.rail_hover })
+                                        .bg(if selected { c.accent } else { c.rail_selection })
+                                        .border_1()
+                                        .border_color(c.rail_border)
                                         .text_color(if selected {
                                             c.accent_ink
                                         } else {
