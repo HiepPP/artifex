@@ -107,7 +107,7 @@ delta. `peak_cpu.sh` reports per-second windows where 100% is one core.
 | Editor | Virtualised rows, tree-sitter highlighting scoped to the visible range, `Cmd-S` |
 | Terminal | `zsh` over `alacritty_terminal`, 256 and true colour, arrows, resize, IME |
 | Git | Branch, status, stage, unstage, stage all, diff tabs |
-| Local MCP | Authenticated workspace discovery and fast-forward pull for Claude Code and Codex |
+| Local MCP | Authenticated workspace discovery, pull, refresh, file opening, and state for Claude Code and Codex |
 | Quick Open | `Cmd-P`, fuzzy path ranking |
 | Command Palette | `Cmd-Shift-P`, registered commands run the same handlers as the keys |
 | Search All Files | `Cmd-Shift-F`, batched results, cancellable, bounded at 1,000 lines |
@@ -141,7 +141,7 @@ no Mermaid. The POC is not aiming at feature parity.
 ## Local MCP for Claude Code and Codex
 
 The running app exposes `http://127.0.0.1:47831/mcp` using Streamable HTTP.
-It serves `list_workspaces` and `pull_workspace`; no second app instance is needed.
+It serves five tools; no second app instance is needed.
 Only agents running on this Mac can connect. Remote agents need a separate design.
 
 ### Available tools
@@ -150,6 +150,20 @@ Only agents running on this Mac can connect. Remote agents need a separate desig
 |---|---|---|
 | `list_workspaces` | `{}` | Open workspace IDs, paths, cached branch/upstream/short HEAD, busy state, and unsaved-buffer state |
 | `pull_workspace` | `workspace_id`, `expected_branch` (required strings) | Fast-forward pull of the configured upstream; before/after HEAD and refresh state |
+| `refresh_workspace` | `workspace_id` | Reload clean file views, report `skipped_dirty_paths`, and schedule Git/index refresh without fetching |
+| `open_file` | `workspace_id`, relative `path`, optional one-based `line` | Select workspace and permanent file tab; return resolved path and actual line |
+| `get_workspace_state` | `workspace_id` | Active workspace flag, selected tab, unsaved paths, cached Git state, and `refresh_pending` |
+
+For local edits, call `refresh_workspace`, then read `get_workspace_state` until
+`refresh_pending` is false. Refresh preserves dirty buffers and does not save or
+pull. Its `git_and_index: scheduled` response acknowledges the scan, not completion.
+State reads do not scan or fetch; `git.source` is `cached`.
+
+`open_file` accepts an existing file inside the workspace, including symlinks that
+resolve inside it. Absolute paths and escaping symlinks are rejected. Text files
+have a 2 MB limit. A `line` requires text and switches Markdown to source view;
+lines past the end clamp to the final line. Existing tabs and dirty buffers are reused.
+
 
 Use the ID returned by `list_workspaces` and pass its `branch` as
 `expected_branch`. For example, call `pull_workspace` with:

@@ -151,6 +151,20 @@ impl EditorView {
         })
     }
 
+    pub(crate) fn cursor_position(&self) -> (usize, usize) {
+        (self.cursor_row, self.cursor_byte)
+    }
+
+    pub(crate) fn restore_cursor(&mut self, (row, byte): (usize, usize)) {
+        self.reveal_line(row);
+        if let Some(line) = self.lines.get(self.cursor_row) {
+            self.cursor_byte = byte.min(line.len());
+            while !line.is_char_boundary(self.cursor_byte) {
+                self.cursor_byte = self.cursor_byte.saturating_sub(1);
+            }
+        }
+    }
+
     /// The 1-based line the cursor sits on, for `path:line` references.
     pub fn cursor_line(&self) -> usize {
         self.cursor_row + 1

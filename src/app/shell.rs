@@ -475,6 +475,7 @@ impl Shell {
         // so the result is matched back by root, not by the index it started
         // from.
         let scan_root = root.clone();
+        let scan_owner = workspace.commit_input.entity_id();
 
         cx.spawn(async move |shell, cx| {
             let (files, git) = cx
@@ -490,7 +491,7 @@ impl Shell {
                     let found = shell
                         .workspaces
                         .iter()
-                        .position(|workspace| workspace.root == scan_root);
+                        .position(|workspace| workspace.root == scan_root && workspace.commit_input.entity_id() == scan_owner);
                     let Some(index) = found else {
                         return;
                     };
@@ -618,6 +619,10 @@ impl Shell {
                             })).collect();
                             let _ = request.reply.try_send(Ok(serde_json::json!({"workspaces": workspaces})));
                         }
+                        action @ (Action::Refresh { .. } | Action::State { .. } | Action::Open { .. }) => {
+                            let result = shell.mcp_workspace_action(action, cx);
+                            let _ = request.reply.try_send(result);
+                        }
                         Action::Pull { workspace_id, expected_branch } => {
                             let index = shell.workspaces.iter().position(|w| format!("{:?}", w.commit_input.entity_id()) == workspace_id);
                             let result = match index {
@@ -630,6 +635,81 @@ impl Shell {
                 }).is_err() { break; }
             }
         }).detach();
+    }
+
+    fn mcp_workspace_action(
+        &mut self,
+        action: crate::services::mcp::Action,
+        cx: &mut Context<Self>,
+    ) -> Result<serde_json::Value, String> {
+        use crate::services::mcp::{Action, resolve_file};
+        use serde_json::json;
+        let workspace_id = match &action {
+            Action::Refresh { workspace_id } | Action::State { workspace_id }
+            | Action::Open { workspace_id, .. } => workspace_id,
+            _ => return Err("Unsupported workspace action".into()),
+        };
+        let index = self.workspaces.iter().position(|w| format!("{:?}", w.commit_input.entity_id()) == *workspace_id)
+            .ok_or("Unknown or closed workspace")?;
+        let w = self.workspaces.get_mut(index).ok_or("Unknown or closed workspace")?;
+        match &action {
+            Action::State { .. } => {
+                let selected_tab = w.selected_tab().map(|tab| {
+                    let (kind, path) = match &tab.kind {
+                        TabKind::Terminal(_) => ("terminal", None),
+                        TabKind::File { path, .. } => ("file", Some(path.clone())),
+                        TabKind::Image { path } => ("image", Some(path.clone())),
+                        TabKind::Video { path, .. } => ("video", Some(path.clone())),
+                        TabKind::Diff { path, .. } => ("diff", Some(w.root.join(path))),
+                        TabKind::ImageDiff { path, .. } => ("image_diff", Some(w.root.join(path))),
+                    };
+                    json!({"kind":kind,"path":path})
+                });
+                Ok(json!({"workspace_id":workspace_id,"path":w.root,"active":self.active == index,
+                    "selected_tab":selected_tab,"unsaved_paths":w.unsaved_paths(cx),
+                    "git":{"source":"cached","branch":w.git.branch,"upstream":w.git.upstream,
+                        "head_short":w.git.head_short,"busy":w.git_operation_in_flight()},
+                    "refresh_pending":w.scan.running || w.scan.queued_git || w.scan.queued_index}))
+            }
+            Action::Refresh { .. } => {
+                if w.git_operation_in_flight() { return Err("Git operation already in progress".into()); }
+                let skipped = w.unsaved_paths(cx);
+                w.reload_clean_file_views(cx);
+                self.scan_workspace(index, true, true, cx);
+                cx.notify();
+                Ok(json!({"workspace_id":workspace_id,"file_views":if skipped.is_empty() {"reloaded"} else {"dirty_buffers_preserved"},
+                    "skipped_dirty_paths":skipped,"git_and_index":"scheduled"}))
+            }
+            Action::Open { path, line, .. } => {
+                let path = resolve_file(&w.root, path)?;
+                let media = super::workspace::is_image_path(&path) || super::workspace::is_video_path(&path);
+                if media && line.is_some() { return Err("Line navigation requires a text file".into()); }
+                if !media {
+                    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+                    if size > crate::services::file_index::MAX_TEXT_BYTES { return Err("Text file exceeds 2 MB".into()); }
+                    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                    if text.contains('\0') { return Err("File is not text".into()); }
+                }
+                // Keep an existing tab's path spelling when it names the same file through a symlink.
+                let tab_path = w.tabs.iter().filter_map(|tab| tab.file_path())
+                    .find(|p| p.canonicalize().ok().as_ref() == Some(&path)).map(Path::to_path_buf).unwrap_or_else(|| path.clone());
+                w.open_file(tab_path, false, cx);
+                let mut actual_line = None;
+                if let Some(line) = line {
+                    if let Some(tab) = w.tabs.get_mut(w.selected) {
+                        if let TabKind::File { editor, mode, .. } = &mut tab.kind {
+                            *mode = FileMode::Source;
+                            editor.update(cx, |editor, _| editor.reveal_line(line.saturating_sub(1)));
+                            actual_line = Some(editor.read(cx).cursor_line());
+                        }
+                    }
+                }
+                self.select_workspace(index, cx);
+                cx.notify();
+                Ok(json!({"workspace_id":workspace_id,"path":path,"line":actual_line}))
+            }
+            _ => Err("Unsupported workspace action".into()),
+        }
     }
 
     pub(crate) fn pull_latest(&mut self, cx: &mut Context<Self>) {

@@ -28,6 +28,9 @@ use std::{
 pub type Reply = async_channel::Sender<Result<Value, String>>;
 pub enum Action {
     List,
+    Refresh { workspace_id: String },
+    State { workspace_id: String },
+    Open { workspace_id: String, path: String, line: Option<usize> },
     Pull {
         workspace_id: String,
         expected_branch: String,
@@ -58,6 +61,31 @@ struct PullArgs {
     expected_branch: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceArgs {
+    workspace_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenArgs {
+    workspace_id: String,
+    path: String,
+    line: Option<std::num::NonZeroUsize>,
+}
+
+pub(crate) fn resolve_file(root: &Path, path: &str) -> Result<std::path::PathBuf, String> {
+    if path.is_empty() || Path::new(path).is_absolute() {
+        return Err("Expected a workspace-relative file path".into());
+    }
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let file = root.join(path).canonicalize().map_err(|e| e.to_string())?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err("File must be inside the workspace".into());
+    }
+    Ok(file)
+}
+
 impl ServerHandler for Handler {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
@@ -74,7 +102,10 @@ impl ServerHandler for Handler {
         let mut result = ListToolsResult::default();
         result.tools = serde_json::from_value(json!([
             {"name":"list_workspaces","description":"List open Artifex workspaces and their current cached Git state.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}},
-            {"name":"pull_workspace","description":"Fetch and fast-forward an open workspace's configured upstream. Requires a saved editor and no active Git operation. Does not push or switch branches.","inputSchema":{"type":"object","properties":{"workspace_id":{"type":"string","minLength":1},"expected_branch":{"type":"string","minLength":1}},"required":["workspace_id","expected_branch"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":true}}
+            {"name":"pull_workspace","description":"Fetch and fast-forward an open workspace's configured upstream. Requires a saved editor and no active Git operation. Does not push or switch branches.","inputSchema":{"type":"object","properties":{"workspace_id":{"type":"string","minLength":1},"expected_branch":{"type":"string","minLength":1}},"required":["workspace_id","expected_branch"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":true}},
+            {"name":"refresh_workspace","description":"Reload clean open files and schedule Git/index refresh. Preserves dirty buffers. Does not fetch or pull.","inputSchema":{"type":"object","properties":{"workspace_id":{"type":"string","minLength":1}},"required":["workspace_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}},
+            {"name":"get_workspace_state","description":"Read selected tab, unsaved paths, cached Git state and refresh_pending. Does not scan or fetch.","inputSchema":{"type":"object","properties":{"workspace_id":{"type":"string","minLength":1}},"required":["workspace_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}},
+            {"name":"open_file","description":"Select a workspace and open an existing relative file in a permanent tab. Optional line is one-based and requires text. Preserves unsaved buffers.","inputSchema":{"type":"object","properties":{"workspace_id":{"type":"string","minLength":1},"path":{"type":"string","minLength":1},"line":{"type":"integer","minimum":1}},"required":["workspace_id","path"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}
         ])).map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(result)
     }
@@ -99,6 +130,26 @@ impl ServerHandler for Handler {
                     workspace_id: a.workspace_id,
                     expected_branch: a.expected_branch,
                 }
+            }
+            "refresh_workspace" | "get_workspace_state" => {
+                let a: WorkspaceArgs = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+                if a.workspace_id.is_empty() {
+                    return Err(ErrorData::invalid_params("Workspace must not be empty", None));
+                }
+                if request.name == "refresh_workspace" {
+                    Action::Refresh { workspace_id: a.workspace_id }
+                } else {
+                    Action::State { workspace_id: a.workspace_id }
+                }
+            }
+            "open_file" => {
+                let a: OpenArgs = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+                if a.workspace_id.is_empty() || a.path.is_empty() {
+                    return Err(ErrorData::invalid_params("Workspace and path must not be empty", None));
+                }
+                Action::Open { workspace_id: a.workspace_id, path: a.path, line: a.line.map(|n| n.get()) }
             }
             _ => {
                 return Err(ErrorData::invalid_params(

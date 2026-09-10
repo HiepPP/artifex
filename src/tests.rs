@@ -1646,3 +1646,30 @@ fn mcp_token_is_private_stable_and_rejects_symlinks() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(crate::services::mcp::load_token(&path).is_err());
 }
+
+#[test]
+fn mcp_file_paths_stay_inside_workspace() {
+    use crate::services::mcp::resolve_file;
+    let root = std::env::temp_dir().join(format!("artifex-mcp-paths-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join("hello.txt");
+    fs::write(&file, "hello").unwrap();
+    let link = root.join("inside");
+    let outside = root.join("outside");
+    let _ = fs::remove_file(&link);
+    let _ = fs::remove_file(&outside);
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    std::os::unix::fs::symlink(root.parent().unwrap(), &outside).unwrap();
+    assert_eq!(resolve_file(&root, "hello.txt").unwrap(), file.canonicalize().unwrap());
+    assert_eq!(resolve_file(&root, "inside").unwrap(), file.canonicalize().unwrap());
+    assert!(resolve_file(&root, "").is_err());
+    assert!(resolve_file(&root, file.to_str().unwrap()).is_err());
+    assert!(resolve_file(&root, "missing").is_err());
+    assert!(resolve_file(&root, ".").is_err());
+    assert!(resolve_file(&root, "../").is_err());
+    assert!(resolve_file(&root, "outside").is_err());
+    fs::remove_file(link).unwrap();
+    fs::remove_file(outside).unwrap();
+    fs::remove_file(file).unwrap();
+    fs::remove_dir(root).unwrap();
+}

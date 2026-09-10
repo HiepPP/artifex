@@ -341,6 +341,13 @@ impl Workspace {
         })
     }
 
+    pub(crate) fn unsaved_paths(&self, cx: &App) -> Vec<PathBuf> {
+        self.tabs.iter().filter_map(|tab| match &tab.kind {
+            TabKind::File { path, editor, .. } if editor.read(cx).dirty => Some(path.clone()),
+            _ => None,
+        }).collect()
+    }
+
     pub(crate) fn git_operation_in_flight(&self) -> bool {
         self.pushing || self.pulling || self.fetching
     }
@@ -398,7 +405,9 @@ impl Workspace {
                 skipped_dirty = true;
                 continue;
             }
+            let cursor = editor.read(cx).cursor_position();
             *editor = EditorView::open(path.clone(), cx);
+            editor.update(cx, |editor, _| editor.restore_cursor(cursor));
             if let Some(preview) = preview_view {
                 match preview {
                     PreviewKind::Markdown(view) => {

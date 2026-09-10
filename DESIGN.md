@@ -31,7 +31,7 @@ what this build carries.
 | Markdown preview | Ported as a block tree, not one selectable document |
 | Design tokens, light and dark, pointer cursor | Ported in full |
 | Agent panel, Gemma sidecar, Watchtower runtime | Out of scope. No language model is called |
-| Local MCP server | In scope: workspace discovery and guarded upstream pull |
+| Local MCP server | In scope: workspace discovery, guarded pull, refresh, file opening, and state |
 | Runtime diagnostics probe, `atelier-doctor` | Out of scope |
 | Layout profiles, display sizing tiers | Out of scope |
 | Session persistence | In scope: open workspaces and file tabs. See Session Persistence |
@@ -1064,7 +1064,12 @@ design rule changes.
 - Require a private bearer token from the app support directory. Reject foreign
   origins and hosts. Port conflicts disable MCP with an actionable status message.
 - Support Claude Code and Codex registrations against the same app instance.
-- Expose only `list_workspaces` and `pull_workspace`. A pull requires the returned
+- Expose `list_workspaces`, `pull_workspace`, `refresh_workspace`, `open_file`, and `get_workspace_state`.
+- Refresh reloads clean file views and schedules the existing Git/index scan; dirty buffers are preserved.
+  State reports cached Git data and pending scans without reading disk or fetching.
+- File opening requires a workspace-relative file inside the canonical root, with optional one-based text line.
+  It selects that workspace and a permanent tab without saving or replacing dirty buffers.
+- A pull requires the returned
   workspace ID and expected branch; it never changes the selected workspace.
 - IDs identify an open workspace instance. Closing/reopening invalidates old IDs.
 - UI and MCP share pull guards, fast-forward-only behavior, and completion handling.
