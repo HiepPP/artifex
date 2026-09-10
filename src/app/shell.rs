@@ -118,6 +118,7 @@ pub struct Shell {
     /// `None` when the platform refused a watcher. The Explorer refresh control
     /// and `Workspace: Rebuild File Index` stay the manual fallback.
     watch: Option<WatchHub>,
+    mcp: Option<crate::services::mcp::Server>,
     focus: FocusHandle,
     active_surface: Option<ActiveSurface>,
     /// Last session snapshot written to disk. Render compares against it so
@@ -183,6 +184,7 @@ impl Shell {
             status: None,
             discard_armed: None,
             watch: WatchHub::new(),
+            mcp: None,
             focus: cx.focus_handle(),
             active_surface: None,
             last_session: None,
@@ -191,6 +193,7 @@ impl Shell {
             markdown_event_sources: HashSet::new(),
         });
         shell.update(cx, |shell, cx| {
+            shell.observe_mcp(cx);
             shell.observe_watch(cx);
             shell.observe_explorer(cx);
             for index in 0..shell.workspaces.len() {
@@ -590,95 +593,117 @@ impl Shell {
         cx.notify();
     }
 
-    /// Pulls the configured upstream with a fast-forward-only Git operation.
-    /// Network work happens off the UI thread and completion is matched to the
-    /// workspace root plus operation identity before it can touch UI state.
-    pub(crate) fn pull_latest(&mut self, cx: &mut Context<Self>) {
-        let snapshot = self.workspace().git.clone();
-        if !snapshot.is_repo {
-            self.set_status("Pull unavailable: not a Git repository");
-            cx.notify();
-            return;
-        }
-        if snapshot.upstream.is_none() {
-            self.set_status("Pull unavailable: no upstream configured");
-            cx.notify();
-            return;
-        }
-        if self.workspace().has_unsaved_editors(cx) {
-            self.set_status("Save open files before pulling");
-            cx.notify();
-            return;
-        }
-        if self.workspace().git_operation_in_flight() {
-            self.set_status("Git operation already in progress");
-            cx.notify();
-            return;
-        }
-        let root = self.workspace().root.clone();
-        let Some(operation) = self
-            .workspace_mut()
-            .begin_git_operation(GitOperationKind::Pull)
-        else {
-            return;
+    fn observe_mcp(&mut self, cx: &mut Context<Self>) {
+        use crate::services::mcp::{self, Action};
+        let (server, requests) = match mcp::start() {
+            Ok(started) => started,
+            Err(error) => {
+                eprintln!("artifex: {error}");
+                self.set_status(error);
+                return;
+            }
         };
+        self.mcp = Some(server);
+        cx.spawn(async move |shell, cx| {
+            while let Ok(request) = requests.recv().await {
+                if request.reply.is_closed() { continue; }
+                if shell.update(cx, |shell, cx| {
+                    match request.action {
+                        Action::List => {
+                            let workspaces: Vec<_> = shell.workspaces.iter().map(|w| serde_json::json!({
+                                "workspace_id": format!("{:?}", w.commit_input.entity_id()),
+                                "path": w.root, "branch": w.git.branch, "upstream": w.git.upstream,
+                                "head_short": w.git.head_short, "busy": w.git_operation_in_flight(),
+                                "unsaved_editors": w.has_unsaved_editors(cx),
+                            })).collect();
+                            let _ = request.reply.try_send(Ok(serde_json::json!({"workspaces": workspaces})));
+                        }
+                        Action::Pull { workspace_id, expected_branch } => {
+                            let index = shell.workspaces.iter().position(|w| format!("{:?}", w.commit_input.entity_id()) == workspace_id);
+                            let result = match index {
+                                Some(index) => shell.pull_workspace(index, Some(expected_branch), Some(request.reply.clone()), cx),
+                                None => Err("Unknown or closed workspace".into()),
+                            };
+                            if let Err(error) = result { let _ = request.reply.try_send(Err(error)); }
+                        }
+                    }
+                }).is_err() { break; }
+            }
+        }).detach();
+    }
+
+    pub(crate) fn pull_latest(&mut self, cx: &mut Context<Self>) {
+        if let Err(error) = self.pull_workspace(self.active, None, None, cx) {
+            self.set_status(error);
+            cx.notify();
+        }
+    }
+
+    fn pull_workspace(
+        &mut self,
+        index: usize,
+        expected_branch: Option<String>,
+        reply: Option<crate::services::mcp::Reply>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let workspace = self.workspaces.get_mut(index).ok_or("Unknown workspace")?;
+        if !workspace.git.is_repo {
+            return Err("Pull unavailable: not a Git repository".into());
+        }
+        if workspace.git.upstream.is_none() {
+            return Err("Pull unavailable: no upstream configured".into());
+        }
+        if workspace.has_unsaved_editors(cx) {
+            return Err("Save open files before pulling".into());
+        }
+        if workspace.git_operation_in_flight() {
+            return Err("Git operation already in progress".into());
+        }
+        let root = workspace.root.clone();
+        let workspace_id = format!("{:?}", workspace.commit_input.entity_id());
+        let operation = workspace
+            .begin_git_operation(GitOperationKind::Pull)
+            .ok_or("Git operation already in progress")?;
         self.set_status("Pulling latest...");
         let worker_cancel = operation.cancel.clone();
         let worker_root = root.clone();
         cx.spawn(async move |shell, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    if worker_cancel.load(Ordering::Relaxed) {
-                        return Err("Git pull cancelled".to_string());
-                    }
-                    git::pull_latest(&worker_root)
-                })
-                .await;
-            let _ = shell.update(cx, |shell, cx| {
-                let Some(index) = shell
-                    .workspaces
-                    .iter()
-                    .position(|workspace| workspace.root == root)
-                else {
-                    return;
-                };
-                let Some(workspace) = shell.workspaces.get_mut(index) else {
-                    return;
-                };
-                if !workspace.finish_git_operation(&operation) {
-                    return;
-                }
-                if operation.cancel.load(Ordering::Relaxed) {
-                    return;
+            let result = cx.background_spawn(async move {
+                if worker_cancel.load(Ordering::Relaxed) { return Err("Git pull cancelled before starting".to_string()); }
+                git::pull_checked(&worker_root, expected_branch.as_deref())
+            }).await;
+            let completion = shell.update(cx, |shell, cx| -> Result<serde_json::Value, String> {
+                let index = shell.workspaces.iter().position(|w| w.root == root).ok_or("Workspace closed; pull outcome may have changed disk state")?;
+                let workspace = shell.workspaces.get_mut(index).ok_or("Workspace closed")?;
+                if !workspace.finish_git_operation(&operation) || operation.cancel.load(Ordering::Relaxed) {
+                    return Err("Workspace closed or replaced; pull outcome may have changed disk state".into());
                 }
                 match result {
-                    Ok(message) => {
+                    Ok(mut result) => {
                         let skipped_dirty = workspace.reload_clean_file_views(cx);
-                        shell.set_status(if skipped_dirty {
-                            format!("{message}; save/reconcile open buffers")
-                        } else {
-                            message
-                        });
-                        cx.notify();
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert("workspace_id".into(), serde_json::json!(workspace_id));
+                            object.insert("refresh".into(), serde_json::json!({"file_views": if skipped_dirty { "dirty_buffers_preserved" } else { "reloaded" }, "git_and_index": "scheduled"}));
+                        }
+                        shell.set_status(if skipped_dirty { "Pulled latest; save/reconcile open buffers" } else { "Pulled latest" });
                         shell.scan_workspace(index, true, true, cx);
-                    }
-                    Err(err) => {
-                        shell.set_status(err);
                         cx.notify();
-                        // Pull may have fetched the tracking ref before
-                        // refusing the fast-forward, so refresh incoming
-                        // counts even on an actionable failure.
+                        Ok(result)
+                    }
+                    Err(error) => {
+                        shell.set_status(error.clone());
                         shell.scan_workspace(index, false, true, cx);
+                        cx.notify();
+                        Err(error)
                     }
                 }
-            });
-        })
-        .detach();
+            }).unwrap_or_else(|_| Err("App closed; pull outcome unknown".into()));
+            if let Some(reply) = reply { let _ = reply.try_send(completion); }
+        }).detach();
         cx.notify();
+        Ok(())
     }
 
-    /// Fetches the configured upstream so incoming commit counts reflect the
-    /// latest local remote-tracking ref. This is always an explicit action.
     pub(crate) fn refresh_git_remote(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.workspace().git.clone();
         if !snapshot.is_repo {

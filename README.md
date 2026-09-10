@@ -107,6 +107,7 @@ delta. `peak_cpu.sh` reports per-second windows where 100% is one core.
 | Editor | Virtualised rows, tree-sitter highlighting scoped to the visible range, `Cmd-S` |
 | Terminal | `zsh` over `alacritty_terminal`, 256 and true colour, arrows, resize, IME |
 | Git | Branch, status, stage, unstage, stage all, diff tabs |
+| Local MCP | Authenticated workspace discovery and fast-forward pull for Claude Code and Codex |
 | Quick Open | `Cmd-P`, fuzzy path ranking |
 | Command Palette | `Cmd-Shift-P`, registered commands run the same handlers as the keys |
 | Search All Files | `Cmd-Shift-F`, batched results, cancellable, bounded at 1,000 lines |
@@ -133,6 +134,106 @@ its only reload path.
 
 ## What Is Deliberately Absent
 
-No AI agent panel, no MCP, no Watchtower, no Gemma sidecar, no model calls. No
+No AI agent panel, no Watchtower runtime, no Gemma sidecar, no model calls. No
 persistence, no drag reorder, no editor selection or find bar, no image diffs,
 no Mermaid. The POC is not aiming at feature parity.
+
+## Local MCP for Claude Code and Codex
+
+The running app exposes `http://127.0.0.1:47831/mcp` using Streamable HTTP.
+It serves `list_workspaces` and `pull_workspace`; no second app instance is needed.
+Only agents running on this Mac can connect. Remote agents need a separate design.
+
+### Available tools
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `list_workspaces` | `{}` | Open workspace IDs, paths, cached branch/upstream/short HEAD, busy state, and unsaved-buffer state |
+| `pull_workspace` | `workspace_id`, `expected_branch` (required strings) | Fast-forward pull of the configured upstream; before/after HEAD and refresh state |
+
+Use the ID returned by `list_workspaces` and pass its `branch` as
+`expected_branch`. For example, call `pull_workspace` with:
+
+```json
+{
+  "workspace_id": "<workspace_id from list_workspaces>",
+  "expected_branch": "main"
+}
+```
+
+Replace `main` with the discovered branch. The tools do not push code or switch branches.
+
+### Connect clients
+
+The first launch creates a private, random token at
+`~/Library/Application Support/Artifex/mcp-token` (mode `600`). Do not commit or
+share this file. Load it into the environment of the client process:
+
+```bash
+export ARTIFEX_MCP_TOKEN="$(cat "$HOME/Library/Application Support/Artifex/mcp-token")"
+```
+
+Register Claude Code for the current project (local scope, kept outside the repo):
+
+```bash
+claude mcp add --transport http --scope local \
+  --header 'Authorization: Bearer ${ARTIFEX_MCP_TOKEN}' \
+  -- artifex http://127.0.0.1:47831/mcp
+```
+
+Equivalent Claude Code MCP entry (the environment variable expands when connecting):
+
+```json
+{"mcpServers":{"artifex":{"type":"http","url":"http://127.0.0.1:47831/mcp","headers":{"Authorization":"Bearer ${ARTIFEX_MCP_TOKEN}"}}}}
+```
+
+Register Codex in the user configuration:
+
+```bash
+codex mcp add artifex --url http://127.0.0.1:47831/mcp \
+  --bearer-token-env-var ARTIFEX_MCP_TOKEN
+```
+
+Equivalent entry in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.artifex]
+url = "http://127.0.0.1:47831/mcp"
+bearer_token_env_var = "ARTIFEX_MCP_TOKEN"
+tool_timeout_sec = 60
+```
+
+Start a fresh Claude Code or Codex session from that terminal. Use `/mcp` to
+check the connection. A desktop client started from Finder does not inherit
+this terminal's exported token; launch it with that environment or configure
+its local credential mechanism. Reconnect after restarting Artifex, then
+rediscover workspace IDs. IDs last only while their workspace remains open.
+
+After an agent pushes its work to the workspace's upstream, call
+`list_workspaces`, then `pull_workspace` with `workspace_id` and
+`expected_branch` from discovery. The tool checks the live branch again before
+pulling. Unsaved editor buffers, overlapping operations, divergence, and
+conflicting local edits produce errors. No auto-stash, rebase, or branch switch
+occurs. The selected workspace stays unchanged.
+
+A successful result includes `before_head`, `after_head`, and `refresh`.
+Clean file views reload before the reply; Git/index refresh is scheduled and
+finishes asynchronously. Newly dirty buffers stay intact for reconciliation.
+A 45-second timeout means the outcome is unknown: the pull may still finish.
+Inspect repository state before retrying. Closing a workspace or the app does
+not roll back a Git command that has already started.
+
+For a port conflict, quit another Artifex instance or launch the bundle binary
+with `ARTIFEX_MCP_PORT` set to a fixed nonzero port. Update both client URLs.
+The server stays on loopback and rejects foreign Host/Origin values. Startup
+errors appear in the app status and process output.
+
+To rotate the token, quit Artifex, move `mcp-token` to a private backup, then
+relaunch. Reload the new token in each client environment and reconnect.
+To remove registrations:
+
+```bash
+claude mcp remove --scope local artifex
+codex mcp remove artifex
+unset ARTIFEX_MCP_TOKEN
+```

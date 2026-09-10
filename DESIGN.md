@@ -30,7 +30,8 @@ what this build carries.
 | Quick Open, Command Palette, Search All Files | Ported |
 | Markdown preview | Ported as a block tree, not one selectable document |
 | Design tokens, light and dark, pointer cursor | Ported in full |
-| Agent panel, MCP, Gemma sidecar, Watchtower | Out of scope. No language model is called |
+| Agent panel, Gemma sidecar, Watchtower runtime | Out of scope. No language model is called |
+| Local MCP server | In scope: workspace discovery and guarded upstream pull |
 | Runtime diagnostics probe, `atelier-doctor` | Out of scope |
 | Layout profiles, display sizing tiers | Out of scope |
 | Session persistence | In scope: open workspaces and file tabs. See Session Persistence |
@@ -1055,3 +1056,20 @@ holds, in `~/Library/Application Support/Artifex/session.json`.
 
 Update this document when a shared token, breakpoint, component contract, or
 design rule changes.
+
+## Local MCP
+
+- The running app serves Streamable HTTP at `http://127.0.0.1:47831/mcp`.
+  `ARTIFEX_MCP_PORT` may select another fixed port. Never bind to a public interface.
+- Require a private bearer token from the app support directory. Reject foreign
+  origins and hosts. Port conflicts disable MCP with an actionable status message.
+- Support Claude Code and Codex registrations against the same app instance.
+- Expose only `list_workspaces` and `pull_workspace`. A pull requires the returned
+  workspace ID and expected branch; it never changes the selected workspace.
+- IDs identify an open workspace instance. Closing/reopening invalidates old IDs.
+- UI and MCP share pull guards, fast-forward-only behavior, and completion handling.
+  Refuse unsaved buffers and overlapping Git operations; preserve working-tree edits.
+- Return before/after HEAD and refresh state. A timeout means outcome unknown,
+  not successful cancellation. Do not automatically retry a timed-out pull.
+- App shutdown stops the listener. Remote access, arbitrary commands, and model
+  execution remain out of scope.

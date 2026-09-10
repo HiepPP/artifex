@@ -1604,3 +1604,45 @@ fn git_pull_latest_rejects_overlapping_dirty_files_without_autostash() {
     let stash = pull_git_output(&fixture.local, &["stash", "list"]);
     assert!(String::from_utf8_lossy(&stash.stdout).trim().is_empty());
 }
+
+#[test]
+fn mcp_pull_checks_live_branch_and_reports_heads() {
+    let fixture = pull_fixture("mcp-branch");
+    push_seed_commit(&fixture, "tracked.txt", "two\n", "MCP update");
+    let before = pull_git_output(&fixture.local, &["rev-parse", "HEAD"]).stdout;
+    let error = crate::services::git::pull_checked(&fixture.local, Some("wrong")).unwrap_err();
+    assert!(error.contains("Branch mismatch"));
+    assert_eq!(
+        pull_git_output(&fixture.local, &["rev-parse", "HEAD"]).stdout,
+        before
+    );
+    let result = crate::services::git::pull_checked(&fixture.local, Some("main")).unwrap();
+    assert_eq!(
+        result["before_head"],
+        String::from_utf8_lossy(&before).trim()
+    );
+    assert_ne!(result["before_head"], result["after_head"]);
+    assert_eq!(
+        fs::read_to_string(fixture.local.join("tracked.txt")).unwrap(),
+        "two\n"
+    );
+}
+
+#[test]
+fn mcp_token_is_private_stable_and_rejects_symlinks() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fixture = pull_fixture("mcp-token");
+    let path = fixture.local.join("token");
+    let token = crate::services::mcp::load_token(&path).unwrap();
+    assert_eq!(token.len(), 64);
+    assert_eq!(crate::services::mcp::load_token(&path).unwrap(), token);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let link = fixture.local.join("token-link");
+    symlink(&path, &link).unwrap();
+    assert!(crate::services::mcp::load_token(&link).is_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(crate::services::mcp::load_token(&path).is_err());
+}

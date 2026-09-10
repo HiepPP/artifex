@@ -366,6 +366,26 @@ pub fn pull_latest(root: &Path) -> Result<String, String> {
         .map_err(|err| format!("pull failed: {}", err.trim()))
 }
 
+/// Check the live branch immediately before pulling, rather than trusting a cached UI snapshot.
+pub fn pull_checked(
+    root: &Path,
+    expected_branch: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let branch = git(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .map_err(|_| "Pull requires a checked-out branch".to_string())?
+        .trim()
+        .to_owned();
+    if expected_branch.is_some_and(|expected| expected != branch) {
+        return Err(format!("Branch mismatch: current branch is {branch}"));
+    }
+    let before = git(root, &["rev-parse", "HEAD"])?.trim().to_owned();
+    let message = pull_latest(root)?;
+    let after = git(root, &["rev-parse", "HEAD"])?.trim().to_owned();
+    Ok(
+        serde_json::json!({"branch": branch, "before_head": before, "after_head": after, "message": message}),
+    )
+}
+
 pub fn stage(root: &Path, path: &str) -> Result<(), String> {
     git(root, &["add", "--", path]).map(|_| ())
 }
