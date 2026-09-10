@@ -812,9 +812,14 @@ stay rare enough that an idle workspace costs nothing.
 - Run one walk per workspace at a time. Fold a request that arrives mid-walk
   into the run that follows it.
 - Never walk on the main thread in response to a watched event.
+- While Explorer is visible, reconcile its root and expanded directory listings
+  once per second on a background task. This bounded check includes Git-ignored
+  entries and symlink targets, and works even when notifications are unavailable.
+  Compare against the captured tree before applying results so an intervening
+  expansion or watcher refresh is never overwritten. Only changed listings or
+  file metadata trigger a refresh; never poll the entire workspace recursively.
 - Keep the Explorer refresh control and `Workspace: Rebuild File Index`. They are
-  the fallback when the platform refuses a watcher, and the only path for a root
-  that is not watched.
+  optional ways to request a full index rebuild immediately.
 
 Divergence: nested `.gitignore` files are not read by the watcher's own filter.
 The walk that follows honours them, so the only cost is a rebuild that finds

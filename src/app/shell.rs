@@ -192,6 +192,7 @@ impl Shell {
         });
         shell.update(cx, |shell, cx| {
             shell.observe_watch(cx);
+            shell.observe_explorer(cx);
             for index in 0..shell.workspaces.len() {
                 shell.watch_workspace(index);
                 shell.scan_workspace(index, true, true, cx);
@@ -349,6 +350,50 @@ impl Shell {
             SidebarTab::Git => session::SidebarTabState::Git,
         };
         state
+    }
+
+    fn observe_explorer(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |shell, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let Ok(tree) = shell.update(cx, |shell, _| {
+                    (shell.shows_sidebar
+                        && !shell.focus_mode
+                        && shell.sidebar_tab == SidebarTab::Explorer)
+                        .then(|| shell.workspace().tree.clone())
+                }) else {
+                    return;
+                };
+                let Some(tree) = tree else { continue };
+                let (original, refreshed) = cx
+                    .background_spawn(async move {
+                        let refreshed = tree.poll();
+                        (tree, refreshed)
+                    })
+                    .await;
+                let Some((fresh, structural)) = refreshed else {
+                    continue;
+                };
+                if shell
+                    .update(cx, |shell, cx| {
+                        let index = shell.active;
+                        let workspace = shell.workspace_mut();
+                        if workspace.tree != original {
+                            return;
+                        }
+                        workspace.tree = fresh;
+                        shell.scan_workspace(index, structural, true, cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Drains the debounced watcher stream for as long as the shell lives.

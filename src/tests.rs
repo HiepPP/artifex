@@ -98,6 +98,76 @@ fn terminal_resize_reflows_primary_screen_and_keeps_selection() {
 }
 
 #[test]
+fn explorer_poll_reconciles_missed_events_without_a_watcher() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("artifex-poll-{}", std::process::id()));
+    fs::create_dir(&dir).unwrap();
+    let root = dir.join("workspace");
+    let target = dir.join("linked-target");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&target).unwrap();
+    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+    symlink(&target, root.join("linked")).unwrap();
+    let mut tree = fs_tree::FileTree::new(root.clone());
+    tree.toggle(&root.join("linked"));
+    assert!(tree.poll().is_none(), "idle listings must not refresh");
+
+    fs::write(root.join("new.log"), "ignored but visible").unwrap();
+    let (fresh, structural) = tree.poll().expect("ignored creation must appear");
+    assert!(structural);
+    assert!(fresh.rows.iter().any(|row| row.entry.name == "new.log"));
+    tree = fresh;
+
+    fs::write(target.join("new.txt"), "linked content").unwrap();
+    let (fresh, structural) = tree.poll().expect("linked creation must appear");
+    assert!(structural);
+    assert!(fresh.is_expanded(&root.join("linked")));
+    assert!(
+        fresh
+            .rows
+            .iter()
+            .any(|row| row.entry.path == root.join("linked/new.txt"))
+    );
+    tree = fresh;
+
+    fs::write(target.join("new.txt"), "updated linked content").unwrap();
+    let (fresh, structural) = tree.poll().expect("content change must refresh metadata");
+    assert!(
+        !structural,
+        "content writes must not rebuild the file index"
+    );
+    tree = fresh;
+
+    fs::rename(root.join("new.log"), root.join("renamed.log")).unwrap();
+    let (fresh, structural) = tree.poll().expect("rename must appear");
+    assert!(structural);
+    assert!(!fresh.rows.iter().any(|row| row.entry.name == "new.log"));
+    tree = fresh;
+    fs::remove_file(root.join("renamed.log")).unwrap();
+    let (fresh, structural) = tree.poll().expect("deletion must appear");
+    assert!(structural);
+    assert!(!fresh.rows.iter().any(|row| row.entry.name == "renamed.log"));
+    tree = fresh;
+
+    fs::create_dir(root.join("target")).unwrap();
+    fs::write(root.join("target/output"), "build churn").unwrap();
+    assert!(
+        tree.poll().is_none(),
+        "hard-ignored output must not trigger scans"
+    );
+
+    fs::remove_file(root.join("target/output")).unwrap();
+    fs::remove_dir(root.join("target")).unwrap();
+    fs::remove_file(target.join("new.txt")).unwrap();
+    fs::remove_file(root.join("linked")).unwrap();
+    fs::remove_file(root.join(".gitignore")).unwrap();
+    fs::remove_dir(target).unwrap();
+    fs::remove_dir(root).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn file_tree_hides_hard_ignored_directories() {
     let dir = fixture_dir();
     let tree = fs_tree::FileTree::new(dir.clone());

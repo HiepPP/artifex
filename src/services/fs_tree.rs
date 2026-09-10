@@ -32,21 +32,23 @@ pub const TCC_PROTECTED: &[&str] = &[
     "Library",
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+    disk_stamp: Option<(u64, std::time::SystemTime)>,
 }
 
 /// A visible row: one entry plus its depth.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub entry: Entry,
     pub depth: usize,
     pub expanded: bool,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct FileTree {
     root: PathBuf,
     children: HashMap<PathBuf, Vec<Entry>>,
@@ -113,6 +115,25 @@ impl FileTree {
         self.rebuild();
     }
 
+    /// Reconcile only displayed directories, including ignored and linked paths.
+    /// Run off the UI thread; the original tree is the stale-result guard.
+    pub fn poll(&self) -> Option<(Self, bool)> {
+        let mut fresh = self.clone();
+        fresh.refresh();
+        if self.rows == fresh.rows {
+            return None;
+        }
+        let structural = self
+            .rows
+            .iter()
+            .map(|row| (&row.entry.path, row.entry.is_dir))
+            .ne(fresh
+                .rows
+                .iter()
+                .map(|row| (&row.entry.path, row.entry.is_dir)));
+        Some((fresh, structural))
+    }
+
     fn ensure_children(&mut self, path: &Path) {
         if self.children.contains_key(path) {
             return;
@@ -158,10 +179,23 @@ fn read_dir(path: &Path) -> Vec<Entry> {
                 return None;
             }
             let is_dir = item.path().is_dir();
+            // Directory mtime also changes for hidden build output. Its visible
+            // children are compared separately when the directory is expanded.
+            let disk_stamp = if is_dir {
+                None
+            } else {
+                std::fs::metadata(item.path()).ok().and_then(|metadata| {
+                    metadata
+                        .modified()
+                        .ok()
+                        .map(|modified| (metadata.len(), modified))
+                })
+            };
             Some(Entry {
                 path: item.path(),
                 name,
                 is_dir,
+                disk_stamp,
             })
         })
         .collect();
