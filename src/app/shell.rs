@@ -119,6 +119,7 @@ pub struct Shell {
     /// and `Workspace: Rebuild File Index` stay the manual fallback.
     watch: Option<WatchHub>,
     mcp: Option<crate::services::mcp::Server>,
+    close_prompt_pending: bool,
     focus: FocusHandle,
     active_surface: Option<ActiveSurface>,
     /// Last session snapshot written to disk. Render compares against it so
@@ -185,6 +186,7 @@ impl Shell {
             discard_armed: None,
             watch: WatchHub::new(),
             mcp: None,
+            close_prompt_pending: false,
             focus: cx.focus_handle(),
             active_surface: None,
             last_session: None,
@@ -993,6 +995,77 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn request_close(
+        &mut self,
+        workspace_index: usize,
+        tab_id: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.close_prompt_pending || (tab_id.is_none() && self.workspaces.len() <= 1) {
+            return;
+        }
+        let Some(workspace) = self.workspaces.get(workspace_index) else { return; };
+        let workspace_id = workspace.commit_input.entity_id();
+        let dirty: Vec<_> = workspace.tabs.iter()
+            .filter(|tab| tab_id.is_none_or(|id| tab.id == id))
+            .filter_map(|tab| match &tab.kind {
+                TabKind::File { editor, path, .. } if editor.read(cx).dirty => Some(path.display().to_string()),
+                _ => None,
+            }).collect();
+        if dirty.is_empty() {
+            self.finish_close(workspace_id, tab_id, false, cx);
+            return;
+        }
+        self.close_prompt_pending = true;
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Save changes before closing?",
+            Some(&dirty.join("\n")),
+            &["Save", "Discard", "Cancel"],
+            cx,
+        );
+        cx.spawn(async move |shell, cx| {
+            let answer = answer.await.ok();
+            let _ = shell.update(cx, |shell, cx| {
+                shell.close_prompt_pending = false;
+                match answer {
+                    Some(0) => shell.finish_close(workspace_id, tab_id, true, cx),
+                    Some(1) => shell.finish_close(workspace_id, tab_id, false, cx),
+                    _ => {},
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn finish_close(&mut self, workspace_id: EntityId, tab_id: Option<usize>, save: bool, cx: &mut Context<Self>) {
+        let Some(index) = self.workspaces.iter().position(|w| w.commit_input.entity_id() == workspace_id) else { return; };
+        let Some(workspace) = self.workspaces.get_mut(index) else { return; };
+        if save {
+            for tab in &workspace.tabs {
+                if tab_id.is_some_and(|id| tab.id != id) { continue; }
+                if let TabKind::File { editor, .. } = &tab.kind {
+                    if editor.read(cx).dirty {
+                        if let Err(error) = editor.update(cx, |editor, _| editor.save()) {
+                            self.set_status(format!("save failed: {error}"));
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(id) = tab_id {
+            if let Some(tab_index) = workspace.tabs.iter().position(|tab| tab.id == id) {
+                workspace.close_tab(tab_index);
+            }
+            cx.notify();
+        } else {
+            self.close_workspace(index, cx);
+        }
+    }
+
     /// Closes one workspace. The last one stays open because the shell always
     /// renders an active workspace.
     fn close_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1133,10 +1206,10 @@ impl Shell {
         cx.notify();
     }
 
-    fn on_close_tab(&mut self, _: &CloseTab, _: &mut Window, cx: &mut Context<Self>) {
-        let index = self.workspace().selected;
-        self.workspace_mut().close_tab(index);
-        cx.notify();
+    fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.workspace().selected_tab() {
+            self.request_close(self.active, Some(tab.id), window, cx);
+        }
     }
 
     pub(crate) fn on_save(&mut self, _: &SaveFile, _: &mut Window, cx: &mut Context<Self>) {
@@ -1783,9 +1856,9 @@ impl Shell {
                                     .item(
                                         PopupMenuItem::new("Close Workspace")
                                             .disabled(total <= 1)
-                                            .on_click(move |_, _, cx| {
+                                            .on_click(move |_, window, cx| {
                                                 close.update(cx, |shell, cx| {
-                                                    shell.close_workspace(index, cx)
+                                                    shell.request_close(index, None, window, cx)
                                                 })
                                             }),
                                     )

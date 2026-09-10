@@ -493,6 +493,9 @@ of inactive sessions. Every workspace stays fully live for the run.
 - Mark a preview tab with italic label text at `0.72` opacity. Do not add another
   icon.
 - Double click a preview tab to promote it to a permanent tab.
+- Before another file opens, promote dirty previews to permanent tabs; never replace their unsaved buffers.
+- Closing a dirty tab or workspace asks Save / Discard / Cancel. Save closes only after all target saves succeed.
+  A save error or Cancel keeps the target open. Clean closes and last-terminal/workspace protection remain unchanged.
 - Place the close control at the leading edge of a closable tab when Tab close
   buttons is enabled. A tab that cannot close, or any tab while the setting is
   disabled, carries no close slot. A close click must not also select or reopen

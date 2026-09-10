@@ -546,6 +546,13 @@ impl Workspace {
     }
 
     fn open_file_unrecorded(&mut self, path: PathBuf, preview: bool, cx: &mut App) {
+        for tab in &mut self.tabs {
+            if let TabKind::File { editor, .. } = &tab.kind {
+                if tab.preview && editor.read(cx).dirty {
+                    tab.preview = false;
+                }
+            }
+        }
         if let Some(index) = self
             .tabs
             .iter()

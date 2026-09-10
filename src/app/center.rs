@@ -244,10 +244,11 @@ impl Shell {
                                                     ),
                                                 )
                                                 .tooltip_text("Close tab")
-                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                .on_click(cx.listener(move |this, _, window, cx| {
                                                     cx.stop_propagation();
-                                                    this.workspace_mut().close_tab(index);
-                                                    cx.notify();
+                                                    if let Some(tab) = this.workspace().tabs.get(index) {
+                                                        this.request_close(this.active, Some(tab.id), window, cx);
+                                                    }
                                                 })),
                                         )
                                     })
