@@ -1315,13 +1315,6 @@ impl Shell {
                 linear_color_stop(c.rail_top, 0.),
                 linear_color_stop(c.rail_bottom, 1.),
             ))
-            // Atelier's rail sheen: a faint top light falling into shade, so
-            // the rail reads as one lit panel instead of a flat fill.
-            .child(div().absolute().inset_0().bg(linear_gradient(
-                180.,
-                linear_color_stop(gpui::white().opacity(0.06), 0.),
-                linear_color_stop(gpui::black().opacity(0.08), 1.),
-            )))
             .child(
                 h_flex()
                     .h(px(64.))
@@ -1524,37 +1517,57 @@ impl Shell {
                             let name = workspace.name.clone();
                             let path = workspace.root.to_string_lossy().to_string();
                             let shell = shell.clone();
-                            v_flex()
+                            h_flex()
                                 .id(("workspace", index))
                                 .cursor_pointer()
                                 .h(Metrics::RAIL_ITEM_HEIGHT)
-                                .justify_center()
-                                .gap(px(1.))
+                                .items_center()
+                                .gap(Space::S)
                                 .px(Space::S)
                                 .rounded(Radius::ROW)
+                                .border_1()
+                                .border_color(gpui::transparent_black())
                                 .when(selected, |this| {
-                                    // Atelier's glass pill: a top-lit
-                                    // hairline over the fill plus a soft
-                                    // drop, so selection sits above the
-                                    // rail instead of staining it.
-                                    this.bg(c.rail_selection)
-                                        .border_1()
-                                        .border_color(gpui::white().opacity(0.16))
-                                        .shadow(crate::app::chrome::shadow_soft())
+                                    this.bg(c.rail_solid.blend(c.accent.opacity(0.3)))
+                                        .border_color(c.accent.opacity(0.45))
                                 })
                                 .when(!selected, |this| {
-                                    this.border_1()
-                                        .border_color(gpui::transparent_black())
-                                        .hover(|this| this.bg(c.rail_hover))
+                                    this.hover(|this| this.bg(c.rail_hover))
                                         .active(|this| this.bg(c.rail_pressed))
                                 })
                                 .child(
-                                    h_flex()
+                                    div()
+                                        .size(Metrics::CONTROL)
+                                        .flex_none()
+                                        .rounded(Radius::ROW)
+                                        .bg(if selected { c.accent } else { c.rail_hover })
+                                        .text_color(if selected {
+                                            c.accent_ink
+                                        } else {
+                                            c.rail_foreground
+                                        })
+                                        .text_size(Type::HEADLINE * ui_zoom)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .flex()
                                         .items_center()
-                                        .gap(Space::XS)
+                                        .justify_center()
+                                        .child(SharedString::from(
+                                            workspace
+                                                .name
+                                                .chars()
+                                                .find(|ch| ch.is_alphabetic())
+                                                .unwrap_or('A')
+                                                .to_uppercase()
+                                                .to_string(),
+                                        )),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .gap(px(1.))
                                         .child(
                                             div()
-                                                .flex_1()
                                                 .truncate()
                                                 .text_size(Type::BODY * ui_zoom)
                                                 .text_color(c.rail_foreground)
@@ -1563,26 +1576,29 @@ impl Shell {
                                                 })
                                                 .child(SharedString::from(workspace.name.clone())),
                                         )
-                                        .when(changed > 0, |this| {
-                                            this.child(rail_count_badge(changed, c, ui_zoom))
-                                        })
-                                        .when(incoming > 0, |this| {
-                                            this.child(rail_incoming_count_badge(
-                                                ("workspace-incoming", index),
-                                                incoming,
-                                                c,
-                                                ui_zoom,
-                                            ))
+                                        .when(index < 9, |this| {
+                                            this.child(
+                                                div()
+                                                    .font_family("JetBrains Mono")
+                                                    .text_size(Type::MICRO * ui_zoom)
+                                                    .text_color(c.rail_secondary)
+                                                    .child(SharedString::from(format!(
+                                                        "⌘{}",
+                                                        index + 1
+                                                    ))),
+                                            )
                                         }),
                                 )
-                                .when(index < 9, |this| {
-                                    this.child(
-                                        div()
-                                            .font_family("JetBrains Mono")
-                                            .text_size(Type::MICRO * ui_zoom)
-                                            .text_color(c.rail_secondary)
-                                            .child(SharedString::from(format!("⌘{}", index + 1))),
-                                    )
+                                .when(changed > 0, |this| {
+                                    this.child(rail_count_badge(changed, c, ui_zoom))
+                                })
+                                .when(incoming > 0, |this| {
+                                    this.child(rail_incoming_count_badge(
+                                        ("workspace-incoming", index),
+                                        incoming,
+                                        c,
+                                        ui_zoom,
+                                    ))
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.select_workspace(index, cx)
@@ -1749,7 +1765,7 @@ impl Shell {
                                         .text_size(Type::UI * self.ui_zoom)
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(c.rail_foreground)
-                                        .child("Reading Room"),
+                                        .child("Artifex"),
                                 )
                             })
                             .child(crate::app::chrome::toolbar_drag_filler()),
@@ -1767,14 +1783,14 @@ impl Shell {
                             .gap(Space::S)
                             .px(Space::M)
                             .rounded(Radius::CONTROL)
-                            .bg(c.editor)
+                            .bg(c.rail_hover)
                             .border_1()
-                            .border_color(c.border)
+                            .border_color(c.rail_border)
                             .hover(|this| this.border_color(c.accent.opacity(0.7)))
                             .child(
                                 Icon::new(IconName::Search)
                                     .xsmall()
-                                    .text_color(c.ink_secondary),
+                                    .text_color(c.rail_foreground),
                             )
                             .child(
                                 div()
@@ -1782,7 +1798,7 @@ impl Shell {
                                     .min_w(px(0.))
                                     .truncate()
                                     .text_size(Type::LABEL * self.ui_zoom)
-                                    .text_color(c.ink_secondary)
+                                    .text_color(c.rail_foreground)
                                     .child("Search files, symbols, commits..."),
                             )
                             .when(!compact, |this| {
@@ -1790,7 +1806,7 @@ impl Shell {
                                     div()
                                         .font_family("JetBrains Mono")
                                         .text_size(Type::MICRO * self.ui_zoom)
-                                        .text_color(c.ink_secondary.opacity(0.8))
+                                        .text_color(c.rail_secondary)
                                         .child("⌘K"),
                                 )
                             })

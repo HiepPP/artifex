@@ -9,7 +9,7 @@ use crate::app::markdown::{ActiveHeadingChanged, MarkdownView, OpenFileRequested
 use crate::app::shell::Shell;
 use crate::app::workspace::{FileMode, PreviewKind, TabKind, is_html_path};
 use crate::terminal::TerminalEvent;
-use crate::theme::{ActiveTokens as _, Metrics, Radius, Space, Type};
+use crate::theme::{ActiveTokens as _, LayoutMode, Metrics, Radius, Space, Type};
 
 impl Shell {
     pub(crate) fn render_center(
@@ -19,15 +19,36 @@ impl Shell {
     ) -> impl IntoElement {
         self.ensure_web_preview(window, cx);
         self.observe_markdown_events(cx);
+        let c = cx.tokens().c;
         v_flex()
             .size_full()
-            .child(self.render_tab_strip(cx))
-            .child(self.render_tab_content(cx))
+            .p(if self.layout == LayoutMode::Compact {
+                Space::XS
+            } else {
+                Space::M
+            })
+            .bg(c.canvas)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .w_full()
+                    .min_h(px(0.))
+                    .min_w(px(0.))
+                    .rounded(Radius::PANEL)
+                    // GPUI clips children rectangularly; keep opaque content above the corners.
+                    .pb(Radius::PANEL)
+                    .border_1()
+                    .border_color(c.border)
+                    .bg(c.editor)
+                    .shadow(crate::app::chrome::shadow_soft())
+                    .overflow_hidden()
+                    .child(self.render_tab_strip(cx))
+                    .child(self.render_tab_content(cx)),
+            )
     }
 
-    /// `DESIGN.md` > Center Tabs. Selected tab is one inset rounded pill of
-    /// warm glass; when enabled, the close control sits at the leading edge and
-    /// only shows on the selected or hovered tab.
+    /// `DESIGN.md` > Center Tabs. Active tabs use a bottom accent rule;
+    /// close controls retain their existing leading position and hover behavior.
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
         let ui_zoom = self.ui_zoom;
@@ -130,9 +151,6 @@ impl Shell {
                     .items_center()
                     .gap(Space::XS)
                     .px(Space::M)
-                    .bg(c.editor)
-                    .border_b_1()
-                    .border_color(c.border)
                     .text_size(Type::CAPTION * ui_zoom)
                     .text_color(c.ink_secondary)
                     .child(Icon::new(IconName::Folder).xsmall())
@@ -165,13 +183,14 @@ impl Shell {
                     .items_center()
                     .px(Space::XS)
                     .gap(Space::XS)
-                    .bg(crate::app::chrome::chrome_gradient(c))
+                    .bg(c.editor)
                     .border_b_1()
                     .border_color(c.border)
                     .child(
                         h_flex()
                             .id("tab-scroller")
                             .flex_1()
+                            .h_full()
                             .min_w(px(0.))
                             .overflow_x_scroll()
                             .gap(px(2.))
@@ -183,17 +202,21 @@ impl Shell {
                                     .id(("tab", index))
                                     .cursor_pointer()
                                     .group(group.clone())
-                                    .h(Metrics::ROW)
-                                    .min_w(px(112.))
+                                    .h_full()
+                                    .flex_none()
+                                    .min_w(px(0.))
                                     .max_w(px(220.))
                                     .items_center()
                                     .gap(Space::XS)
                                     .px(Space::S)
-                                    .rounded(Radius::ROW)
+                                    .rounded_t(Radius::ROW)
+                                    .border_b_2()
+                                    .border_color(gpui::transparent_black())
                                     .when(is_selected, |this| {
                                         this.bg(c.chrome_selection)
                                             .text_color(c.chrome_selection_ink)
-                                            .shadow(crate::app::chrome::shadow_soft())
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .border_color(c.accent)
                                     })
                                     .when(!is_selected, |this| {
                                         this.text_color(c.ink_secondary)

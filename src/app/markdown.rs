@@ -485,7 +485,8 @@ impl Focusable for MarkdownView {
 impl Render for MarkdownView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.tokens().c;
-        let gh = gh_palette(cx.tokens().dark);
+        let mut gh = gh_palette(cx.tokens().dark);
+        gh.bg = c.editor;
         let zoom = cx.global::<EditorZoom>().0;
         let viewport_padding = VIEWPORT_PADDING;
         let measure = self.measure.clone();

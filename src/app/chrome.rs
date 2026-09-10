@@ -11,20 +11,14 @@ use gpui::{
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, tooltip::Tooltip, v_flex};
 
-use gpui::{Background, BoxShadow, linear_color_stop, linear_gradient, point};
+use gpui::{Background, BoxShadow, point};
 
 use crate::services::material_icons;
 use crate::theme::{Colors, Metrics, Radius, Space, Type};
 
-/// `DESIGN.md` > AtelierChromeBackground: the chrome wash with a faint top
-/// light, shared by the toolbar, the tab strip, panel headers and the status
-/// bar so all four read as one piece of hardware.
+/// Warm Slate uses a flat chrome fill. Keep the shared helper for existing callers.
 pub fn chrome_gradient(c: Colors) -> Background {
-    linear_gradient(
-        180.,
-        linear_color_stop(c.chrome.blend(gpui::white().opacity(0.10)), 0.),
-        linear_color_stop(c.chrome.blend(gpui::black().opacity(0.04)), 1.),
-    )
+    c.chrome.into()
 }
 
 /// Atelier's warm soft shadow: rgb(0.18, 0.12, 0.08) never pure black.

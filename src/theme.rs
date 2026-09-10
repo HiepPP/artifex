@@ -54,21 +54,21 @@ macro_rules! tokens {
 }
 
 tokens! {
-    toolbar                 = (0x292F37, 0x20252C);
-    chrome                  = (0xE7E3DD, 0x23262A);
-    canvas                  = (0xDEDAD3, 0x181A1D);
-    sidebar                 = (0xEEEBE3, 0x202328);
-    panel                   = (0xF2F0EC, 0x292C30);
-    raised                  = (0xD4D0C9, 0x34383D);
-    editor                  = (0xF8F7F4, 0x191B1E);
-    tab_inactive            = (0xE5E1DB, 0x25282C);
-    border                  = (0xBFBAB2, 0x42474D);
-    selection               = (0xDED1C6, 0x4B3730);
-    chrome_selection        = (0xF7F3EE, 0x4D4742);
+    toolbar                 = (0x28343D, 0x202A32);
+    chrome                  = (0xEAE6DF, 0x252B31);
+    canvas                  = (0xEAE6DF, 0x1D2329);
+    sidebar                 = (0xEAE6DF, 0x252B31);
+    panel                   = (0xF3F0EB, 0x292F35);
+    raised                  = (0xE0DCD5, 0x343D45);
+    editor                  = (0xFCFAF6, 0x1C2228);
+    tab_inactive            = (0xF0EDE7, 0x252B31);
+    border                  = (0xD7D2CA, 0x3C464F);
+    selection               = (0xE7D5CA, 0x4B3730);
+    chrome_selection        = (0xFCFAF6, 0x343D45);
     chrome_selection_ink    = (0x2B2724, 0xF2EFEA);
     hover                   = (0xD8D4CD, 0x383C41);
     pressed                 = (0xCCC7BF, 0x44494F);
-    accent                  = (0xA44F32, 0xD79570);
+    accent                  = (0xA65F43, 0xD79570);
     accent_ink              = (0xFFF9F2, 0x21150F);
     // GitHub Primer link blues; the Markdown preview matches github.com.
     link                    = (0x0969DA, 0x4493F8);
@@ -76,15 +76,15 @@ tokens! {
     workflow_done           = (0x4E6C55, 0x7FA98A);
     workflow_todo           = (0x8A652B, 0xCAA15B);
     workflow_blocked        = (0x934941, 0xD17B72);
-    rail_top                = (0x1D232B, 0x171C22);
-    rail_bottom             = (0x2D3B45, 0x202D35);
-    rail_solid              = (0x252D35, 0x1D252C);
+    rail_top                = (0x28343D, 0x202A32);
+    rail_bottom             = (0x2E3B44, 0x26343D);
+    rail_solid              = (0x28343D, 0x202A32);
     rail_foreground         = (0xF3F1EC, 0xF3F1EC);
     rail_secondary          = (0xB6BEC3, 0xADB7BD);
-    rail_selection          = (0x4C565F, 0x46505A);
-    rail_hover              = (0x333C44, 0x2D373F);
-    rail_pressed            = (0x46515A, 0x404B54);
-    rail_border             = (0x59636B, 0x4C575F);
+    rail_selection          = (0x46545E, 0x3C4A54);
+    rail_hover              = (0x35434D, 0x2D3B45);
+    rail_pressed            = (0x43525D, 0x3A4954);
+    rail_border             = (0x46535D, 0x3C4953);
     file_tree_foreground    = (0x302E2B, 0xE8E4DE);
     git_added               = (0x356B43, 0x7FC58C);
     git_modified            = (0x8A5B21, 0xD4A45D);
@@ -92,8 +92,8 @@ tokens! {
     git_untracked           = (0x286E68, 0x63C3B8);
     // Label colours. DESIGN.md defers to the native label colours; the POC
     // pins the two levels it needs so the surfaces stay legible on both bases.
-    ink                     = (0x1E1C1A, 0xE9E5DF);
-    ink_secondary           = (0x6A6560, 0x9A948C);
+    ink                     = (0x262932, 0xE9E5DF);
+    ink_secondary           = (0x62636B, 0xA7A5A1);
 }
 
 /// `DESIGN.md` > Spacing and Shape Tokens.

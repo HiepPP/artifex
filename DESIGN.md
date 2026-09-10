@@ -49,9 +49,8 @@ dense, calm, and expensive.
   remains available, but it must not dominate the shell.
 - Optimize the first screen for repository orientation: choose a workspace,
   browse files, search, inspect changes, read content, and verify provenance.
-- Use an executive-alloy hierarchy: smoked graphite navigation and global
-  toolbar, titanium local chrome, porcelain work surfaces, and one terracotta
-  accent.
+- Use the Warm Slate hierarchy: slate navigation and global toolbar, warm
+  stone local chrome, paper work surfaces, and one terracotta accent.
 - Use compact controls and clear hierarchy instead of decorative chrome.
 - Show state through fill, weight, opacity, and thin rules.
 - Keep the editor matte. Reserve glass for navigation, compact chrome, and
@@ -180,43 +179,43 @@ equivalent, so this build pins `ink` and `ink_secondary` as the two label levels
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
-| `toolbar` | `#292F37` | `#20252C` | Global Reading Room toolbar in both appearances |
-| `chrome` | `#E7E3DD` | `#23262A` | Toolbar, headers, status, tab strip |
-| `canvas` | `#DEDAD3` | `#181A1D` | Window and empty-state background |
-| `sidebar` | `#EEEBE3` | `#202328` | Explorer, Git, and inspector bases |
-| `panel` | `#F2F0EC` | `#292C30` | Cards and local panel content |
-| `raised` | `#D4D0C9` | `#34383D` | Raised controls and palette body |
-| `editor` | `#F8F7F4` | `#191B1E` | Editor, code, and terminal base |
-| `tab_inactive` | `#E5E1DB` | `#25282C` | Inactive tabs |
-| `border` | `#BFBAB2` | `#42474D` | Dividers and control outlines |
-| `selection` | `#DED1C6` | `#4B3730` | Selected rows |
-| `chrome_selection` | `#F7F3EE` | `#4D4742` | Warm glass selection for chrome tabs |
+| `toolbar` | `#28343D` | `#202A32` | Global Reading Room toolbar in both appearances |
+| `chrome` | `#EAE6DF` | `#252B31` | Toolbar, headers, status, tab strip |
+| `canvas` | `#EAE6DF` | `#1D2329` | Window and empty-state background |
+| `sidebar` | `#EAE6DF` | `#252B31` | Explorer, Git, and inspector bases |
+| `panel` | `#F3F0EB` | `#292F35` | Cards and local panel content |
+| `raised` | `#E0DCD5` | `#343D45` | Raised controls and palette body |
+| `editor` | `#FCFAF6` | `#1C2228` | Editor, code, and terminal base |
+| `tab_inactive` | `#F0EDE7` | `#252B31` | Inactive tabs |
+| `border` | `#D7D2CA` | `#3C464F` | Dividers and control outlines |
+| `selection` | `#E7D5CA` | `#4B3730` | Selected rows |
+| `chrome_selection` | `#FCFAF6` | `#343D45` | Warm glass selection for chrome tabs |
 | `chrome_selection_ink` | `#2B2724` | `#F2EFEA` | Text and icons on selected chrome tabs |
 | `hover` | `#D8D4CD` | `#383C41` | Hover state |
 | `pressed` | `#CCC7BF` | `#44494F` | Pressed state |
-| `accent` | `#A44F32` | `#D79570` | Primary emphasis and focus |
+| `accent` | `#A65F43` | `#D79570` | Primary emphasis and focus |
 | `accent_ink` | `#FFF9F2` | `#21150F` | Text on accent fill |
 | `link` | `#2B6EA6` | `#74A9D8` | Prose links in rendered text |
 | `text_selection` | `#4D8DCA` | `#4D8DCA` | Prose text selection, painted at 22 percent |
 | `workflow_done` | `#4E6C55` | `#7FA98A` | Completed workflow state |
 | `workflow_todo` | `#8A652B` | `#CAA15B` | Pending workflow state |
 | `workflow_blocked` | `#934941` | `#D17B72` | Blocked workflow state |
-| `rail_top` | `#1D232B` | `#171C22` | Upper graphite rail gradient stop |
-| `rail_bottom` | `#2D3B45` | `#202D35` | Lower petrol rail gradient stop |
-| `rail_solid` | `#252D35` | `#1D252C` | Flat rail fallback |
+| `rail_top` | `#28343D` | `#202A32` | Upper graphite rail gradient stop |
+| `rail_bottom` | `#2E3B44` | `#26343D` | Lower petrol rail gradient stop |
+| `rail_solid` | `#28343D` | `#202A32` | Flat rail fallback |
 | `rail_foreground` | `#F3F1EC` | `#F3F1EC` | Text and icons on the rail |
 | `rail_secondary` | `#B6BEC3` | `#ADB7BD` | Rail metadata |
-| `rail_selection` | `#4C565F` | `#46505A` | Active rail row fill |
-| `rail_hover` | `#333C44` | `#2D373F` | Rail hover fill |
-| `rail_pressed` | `#46515A` | `#404B54` | Rail pressed fill |
-| `rail_border` | `#59636B` | `#4C575F` | Rail edge |
+| `rail_selection` | `#46545E` | `#3C4A54` | Active rail row fill |
+| `rail_hover` | `#35434D` | `#2D3B45` | Rail hover fill |
+| `rail_pressed` | `#43525D` | `#3A4954` | Rail pressed fill |
+| `rail_border` | `#46535D` | `#3C4953` | Rail edge |
 | `file_tree_foreground` | `#302E2B` | `#E8E4DE` | Explorer label color, including selection |
 | `git_added` | `#356B43` | `#7FC58C` | Additions and success |
 | `git_modified` | `#8A5B21` | `#D4A45D` | Modified state |
 | `git_deleted` | `#A13E37` | `#E17B70` | Deletions and destructive state |
 | `git_untracked` | `#286E68` | `#63C3B8` | Untracked state |
-| `ink` | `#1E1C1A` | `#E9E5DF` | Primary label |
-| `ink_secondary` | `#6A6560` | `#9A948C` | Secondary label |
+| `ink` | `#262932` | `#E9E5DF` | Primary label |
+| `ink_secondary` | `#62636B` | `#A7A5A1` | Secondary label |
 
 Color rules:
 
@@ -253,9 +252,10 @@ Depth rules:
 - Use borders before shadows for structure. The gpui-component theme ships with
   shadows disabled on purpose.
 - Use one `0.12` black scrim behind a blocking overlay.
-- Allow one gradient on the workspace rail. Keep every other surface flat.
+- Allow one subtle gradient on the workspace rail. Keep local chrome flat.
 - A selected interactive surface may use one glass fill and one top-lit hairline.
-  Nothing else gets glow, deep shadow, or a floating-card treatment.
+  The center uses one 12-point inset, 12-point rounded frame and the existing
+  soft shadow. Side panels stay flat; no nested cards or deep shadows.
 
 ## Typography
 
@@ -274,7 +274,8 @@ Depth rules:
 Type rules:
 
 - Use the system face for interface text.
-- Use a serif face for empty-state titles and Markdown H1 and H2 only.
+- Use a serif face for empty-state titles only. Markdown keeps its existing
+  sans-serif heading hierarchy.
 - Use JetBrains Mono for code, paths, shortcuts, counts, and technical metadata.
 - Use semibold for hierarchy. Avoid broad bold text.
 - Size every Markdown heading as a ratio of body size, never as a fixed point
@@ -361,8 +362,8 @@ Every interactive control defines these states where relevant:
 - Normal: clear fill, normal opacity.
 - Hovered: `hover` fill.
 - Pressed: `pressed` fill.
-- Selected: one glass surface with stable geometry. No accent border, underline,
-  or leading rule.
+- Selected: stable geometry and a quiet fill. Center tabs add a bottom accent
+  rule; other controls keep their existing selected treatment.
 - Focused: a component-kit text field that owns keyboard focus shows the
   two-point accent ring the kit paints from `colors.ring`. Surfaces with their
   own caret - the editor, the terminal, a diff - show focus through the caret
@@ -417,7 +418,8 @@ Geometry rules:
   or repositions a row. The `Workspaces` count includes the active workspace.
 - Each row is 44 points with 4-point gaps: the full project name on the first
   line, its `Cmd-1` .. `Cmd-9` shortcut in smaller monospaced secondary text on
-  the second. Never show initials, monograms, or paths.
+  the second. Add a 28-point initial well before the label; never show paths.
+  Use the first alphabetic character, uppercased, with `A` as fallback.
 - Positions past nine stay reachable without a shortcut.
 - Show the changed-file count as a trailing high-contrast badge when it is above
   zero. Count each path once across staged, unstaged, and untracked states.
@@ -425,8 +427,10 @@ Geometry rules:
 - Show non-zero incoming commit counts beside change counts on `Changes` and
   workspace rows. Use a separate rounded pill with a down arrow and a distinct
   semantic tint; never combine commits and changed files into one number.
-- Mark the active workspace with label weight and one selection fill. No
-  checkmark, no leading accent bar, no floating card.
+- Mark the active workspace with label weight and a terracotta-tinted slate
+  fill. Its initial well uses accent with `accent_ink` text; inactive wells use
+  the rail hover fill with rail foreground text.
+  No checkmark, leading accent bar, or shadow.
 - `Add Workspace` opens the native folder panel. It starts at `~/Projects`,
   and falls back to home when that folder does not exist.
   Choosing a folder already open selects that workspace instead of adding a
@@ -464,7 +468,11 @@ of inactive sessions. Every workspace stays fully live for the run.
 
 ### Center Tabs
 
-- Titanium chrome for the reader header, porcelain for the surface below it.
+- One paper-colored center frame with 12-point inset and corner radius, a
+  hairline border and soft shadow. Locator, tabs, and content share that frame.
+  In Compact mode reduce the inset to 4 points to preserve content width.
+- Keep the locator background transparent and reserve 12 points below content:
+  GPUI clips children to a rectangle, not the frame's rounded corners.
 - Use a 36-point locator row followed by a 44-point tab and action row. This
   keeps orientation visible without spending 120 points on passive chrome.
 - The locator shows a folder glyph, the workspace, a chevron glyph, and the
@@ -472,12 +480,14 @@ of inactive sessions. Every workspace stays fully live for the run.
   A terminal shows `terminal`; a diff shows `working tree`.
 - Use icon glyphs for breadcrumb separators. Never render raw `>` punctuation
   as interface chrome.
-- Tab widths stay between 112 and 220 points.
+- Tab widths fit their content up to 220 points; tabs do not shrink when the
+  strip overflows, and long labels truncate within that limit.
 - The tab scroller is the only flexible child and uses `min_w(0)`. It yields
   space before the trailing action group, so Preview, Raw, search, and New
   Terminal never clip at Standard or Compact widths.
-- Render the selected tab as a `ROW`-height pill of `chrome_selection` glass with
-  a top-lit hairline. No accent top rule, no selection border.
+- Tabs fill the tab row's height on paper chrome. The selected tab has a
+  two-point terracotta rule against the strip's bottom divider and semibold
+  text, without a shadow.
 - Mark a preview tab with italic label text at `0.72` opacity. Do not add another
   icon.
 - Double click a preview tab to promote it to a permanent tab.
@@ -586,18 +596,17 @@ selection is off (keyboard selection still works).
 
 ### Markdown Preview
 
-The preview matches github.com's `.markdown-body` rendering (Primer) rather
-than the application tokens. This is a deliberate product decision: a README
-should look the way its author saw it on GitHub.
+The preview keeps github.com's `.markdown-body` typography and block rendering
+(Primer). Its base surface uses the shared `editor` token so the document and
+its Warm Slate frame read as one surface.
 
 - Open `.md` in Preview by default and keep Source one toggle away (`Cmd-D`).
 - Treat leading YAML frontmatter as metadata: omit it from Preview and keep it
   visible in Source.
-- Surface: white `#FFFFFF` / dark `#0D1117`; text `#1F2328` / `#F0F6FC`;
+- Surface: paper `#FCFAF6` / dark `#1C2228`; text `#1F2328` / `#F0F6FC`;
   muted `#59636E` / `#9198A1`; borders `#D1D9E0` / `#3D444D`; subtle fill
-  `#F6F8FA` / `#151B23`. These live in `markdown.rs` as the Primer palette,
-  not in `theme.rs`; only the link blue (`#0969DA` / `#4493F8`) is a shared
-  token because the component kit reads it.
+  `#F6F8FA` / `#151B23`. Content colors live in `markdown.rs` as the Primer palette;
+  the base surface and link blue (`#0969DA` / `#4493F8`) are shared tokens.
 - One 980-point column with 32 points of padding on every side, in every
   layout mode. Tables and code share the prose column; nothing bleeds.
 - Prose blocks (heading, paragraph, list item, quote) reparse their inline
