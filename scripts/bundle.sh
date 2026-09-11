@@ -27,7 +27,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key><string>Artifex</string>
     <key>CFBundleExecutable</key><string>artifex</string>
     <key>CFBundleIdentifier</key><string>com.artifex.app</string>
-    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconFile</key><string>ArchIcon</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -42,7 +42,7 @@ PLIST
 
 cp -f "$BIN" "$APP/Contents/MacOS/artifex"
 if [[ -f "$ICON" ]]; then
-    cp -f "$ICON" "$APP/Contents/Resources/AppIcon.icns"
+    cp -f "$ICON" "$APP/Contents/Resources/ArchIcon.icns"
 else
     echo "warning: app icon not found: $ICON" >&2
 fi
