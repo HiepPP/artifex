@@ -1,10 +1,7 @@
 # Artifex App Icon
 
-The icon is an angular maker's monogram. The terracotta letter suggests cut
-metal, print blocks, and careful workshop craft. A single parchment baseline
-grounds the mark like a ruled work surface. The glyph is an `A` cut from one
-triangle, with the counter and the foot notch removed by an even-odd fill.
+The Joinery icon uses two interlocking angular forms to suggest workshop craft
+and connected workspaces. The SVG master keeps the mark crisp at every size.
+The charcoal tile uses `#1D232B`; the two copper forms use `#A44F32` and `#D79570`.
+
 Run `bash scripts/make_icon.sh` from the repository root to regenerate all assets.
-The two-tone slate tile uses `#1D232B` above and `#2D3B45` below.
-Terracotta uses `#A44F32` and `#D79570`.
-The parchment accent uses `#E7E3DD`; the reserved ink token is `#1E1C1A`.
